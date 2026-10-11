@@ -1,0 +1,11 @@
+build/
+dist/
+recompiled/
+*.o
+*.a
+*.dmg
+*.app
+.DS_Store
+*.swp
+*.pyc
+__pycache__/

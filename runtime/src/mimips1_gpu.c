@@ -1,0 +1,508 @@
+#include "mimips1_gpu.h"
+#include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
+
+#define MIN(a, b) (((a) < (b)) ? (a) : (b))
+#define MAX(a, b) (((a) > (b)) ? (a) : (b))
+
+static inline uint16_t rgb_to_ps1_color(uint8_t r, uint8_t g, uint8_t b, uint8_t mask) {
+    return ((r >> 3) & 0x1F) | (((g >> 3) & 0x1F) << 5) | (((b >> 3) & 0x1F) << 10) | ((mask & 1) << 15);
+}
+
+static inline void ps1_color_to_rgb(uint16_t c, uint8_t* r, uint8_t* g, uint8_t* b) {
+    *r = (uint8_t)(((c >> 0)  & 0x1F) << 3);
+    *g = (uint8_t)(((c >> 5)  & 0x1F) << 3);
+    *b = (uint8_t)(((c >> 10) & 0x1F) << 3);
+}
+
+void ps1_gpu_init(PS1GPU* gpu) {
+    memset(gpu, 0, sizeof(PS1GPU));
+    gpu->status = GPUSTAT_READY_FOR_CMD | GPUSTAT_READY_FOR_DMA | GPUSTAT_READY_FOR_VRAM;
+    gpu->disp_w = 320;
+    gpu->disp_h = 240;
+    gpu->clip_x2 = 1023;
+    gpu->clip_y2 = 511;
+}
+
+void ps1_gpu_reset(PS1GPU* gpu) {
+    ps1_gpu_init(gpu);
+}
+
+uint32_t ps1_gpu_read_status(PS1GPU* gpu) {
+    return gpu->status;
+}
+
+uint32_t ps1_gpu_read_data(PS1GPU* gpu) {
+    if (gpu->transfer.active && gpu->transfer.is_read) {
+        uint16_t p0 = gpu->vram[gpu->transfer.cur_y][gpu->transfer.cur_x];
+        gpu->transfer.cur_x++;
+        if (gpu->transfer.cur_x >= (gpu->transfer.x + gpu->transfer.w)) {
+            gpu->transfer.cur_x = gpu->transfer.x;
+            gpu->transfer.cur_y++;
+        }
+        uint16_t p1 = gpu->vram[gpu->transfer.cur_y][gpu->transfer.cur_x];
+        gpu->transfer.cur_x++;
+        if (gpu->transfer.cur_x >= (gpu->transfer.x + gpu->transfer.w)) {
+            gpu->transfer.cur_x = gpu->transfer.x;
+            gpu->transfer.cur_y++;
+            if (gpu->transfer.cur_y >= (gpu->transfer.y + gpu->transfer.h)) {
+                gpu->transfer.active = false;
+            }
+        }
+        return (uint32_t)p0 | ((uint32_t)p1 << 16);
+    }
+    return 0;
+}
+
+static int get_gp0_cmd_len(uint32_t cmd) {
+    uint8_t op = (cmd >> 24) & 0xFF;
+    if (op == 0x00) return 1;
+    if (op == 0x01) return 1;
+    if (op == 0x02) return 3; // Fill Rect
+    if (op >= 0x20 && op <= 0x3F) {
+        bool is_quad = (op & (1 << 3)) != 0;
+        bool is_textured = (op & (1 << 2)) != 0;
+        bool is_gouraud = (op & (1 << 4)) != 0;
+        
+        int len = 1; // cmd + first vertex or color
+        int num_v = is_quad ? 4 : 3;
+        if (is_gouraud) {
+            len = num_v * (is_textured ? 3 : 2) + (is_textured ? 0 : 0);
+        } else {
+            len = 1 + num_v * (is_textured ? 2 : 1);
+        }
+        return len;
+    }
+    if (op >= 0x40 && op <= 0x5F) {
+        // Line
+        bool is_poly = (op & (1 << 3)) != 0;
+        bool is_gouraud = (op & (1 << 4)) != 0;
+        return is_poly ? 3 : (is_gouraud ? 3 : 2);
+    }
+    if (op >= 0x60 && op <= 0x7F) {
+        // Rectangles / Sprites
+        bool is_textured = (op & (1 << 2)) != 0;
+        uint8_t size_type = (op >> 3) & 3;
+        int len = 2; // color/cmd, coord
+        if (is_textured) len++;
+        if (size_type == 0) len++; // variable size
+        return len;
+    }
+    if (op >= 0x80 && op <= 0x9F) return 4; // VRAM to VRAM
+    if (op >= 0xA0 && op <= 0xBF) return 3; // CPU to VRAM
+    if (op >= 0xC0 && op <= 0xDF) return 3; // VRAM to CPU
+    if (op >= 0xE1 && op <= 0xE6) return 1; // Environment setting
+    return 1;
+}
+
+static void blend_pixel(PS1GPU* gpu, uint16_t* dst, uint8_t fr, uint8_t fg, uint8_t fb, bool semi_trans) {
+    if (!semi_trans) {
+        *dst = rgb_to_ps1_color(fr, fg, fb, 0);
+        return;
+    }
+
+    uint8_t br, bg, bb;
+    ps1_color_to_rgb(*dst, &br, &bg, &bb);
+
+    int r = 0, g = 0, b = 0;
+    switch (gpu->semi_trans_mode) {
+        case 0: // 0.5 * B + 0.5 * F
+            r = (br >> 1) + (fr >> 1);
+            g = (bg >> 1) + (fg >> 1);
+            b = (bb >> 1) + (fb >> 1);
+            break;
+        case 1: // 1.0 * B + 1.0 * F
+            r = br + fr;
+            g = bg + fg;
+            b = bb + fb;
+            break;
+        case 2: // 1.0 * B - 1.0 * F
+            r = br - fr;
+            g = bg - fg;
+            b = bb - fb;
+            break;
+        case 3: // 1.0 * B + 0.25 * F
+            r = br + (fr >> 2);
+            g = bg + (fg >> 2);
+            b = bb + (fb >> 2);
+            break;
+    }
+
+    r = MIN(MAX(r, 0), 255);
+    g = MIN(MAX(g, 0), 255);
+    b = MIN(MAX(b, 0), 255);
+    *dst = rgb_to_ps1_color((uint8_t)r, (uint8_t)g, (uint8_t)b, 1);
+}
+
+uint16_t ps1_gpu_sample_texture(PS1GPU* gpu, int u, int v) {
+    int tex_x = (gpu->tex_page_x * 64) + (u & 0xFF);
+    int tex_y = (gpu->tex_page_y * 256) + (v & 0xFF);
+
+    if (gpu->tex_color_mode == 0) {
+        // 4-bit CLUT
+        int fb_x = (gpu->tex_page_x * 64) + ((u & 0xFF) / 4);
+        uint16_t raw_word = gpu->vram[tex_y % 512][fb_x % 1024];
+        int shift = ((u & 3) * 4);
+        uint8_t clut_idx = (raw_word >> shift) & 0x0F;
+        return gpu->vram[gpu->clut_y % 512][(gpu->clut_x + clut_idx) % 1024];
+    } else if (gpu->tex_color_mode == 1) {
+        // 8-bit CLUT
+        int fb_x = (gpu->tex_page_x * 64) + ((u & 0xFF) / 2);
+        uint16_t raw_word = gpu->vram[tex_y % 512][fb_x % 1024];
+        uint8_t clut_idx = (u & 1) ? (raw_word >> 8) : (raw_word & 0xFF);
+        return gpu->vram[gpu->clut_y % 512][(gpu->clut_x + clut_idx) % 1024];
+    } else {
+        // 15-bit direct
+        return gpu->vram[tex_y % 512][tex_x % 1024];
+    }
+}
+
+// Barycentric triangle rasterizer
+void ps1_gpu_draw_triangle(PS1GPU* gpu, const PS1Vertex* v0, const PS1Vertex* v1, const PS1Vertex* v2, bool textured, bool gouraud, bool semi_trans) {
+    int min_x = MIN(v0->x, MIN(v1->x, v2->x));
+    int max_x = MAX(v0->x, MAX(v1->x, v2->x));
+    int min_y = MIN(v0->y, MIN(v1->y, v2->y));
+    int max_y = MAX(v0->y, MAX(v1->y, v2->y));
+
+    // Clip to drawing area
+    min_x = MAX(min_x, gpu->clip_x1);
+    max_x = MIN(max_x, gpu->clip_x2);
+    min_y = MAX(min_y, gpu->clip_y1);
+    max_y = MIN(max_y, gpu->clip_y2);
+
+    int area = (v1->x - v0->x) * (v2->y - v0->y) - (v1->y - v0->y) * (v2->x - v0->x);
+    if (area == 0) return;
+
+    for (int y = min_y; y <= max_y; y++) {
+        for (int x = min_x; x <= max_x; x++) {
+            int w0 = (v1->x - x) * (v2->y - y) - (v1->y - y) * (v2->x - x);
+            int w1 = (v2->x - x) * (v0->y - y) - (v2->y - y) * (v0->x - x);
+            int w2 = (v0->x - x) * (v1->y - y) - (v0->y - y) * (v1->x - x);
+
+            if ((area > 0 && w0 >= 0 && w1 >= 0 && w2 >= 0) ||
+                (area < 0 && w0 <= 0 && w1 <= 0 && w2 <= 0)) {
+                
+                uint8_t r = v0->r, g = v0->g, b = v0->b;
+                if (gouraud) {
+                    float fw0 = (float)w0 / area;
+                    float fw1 = (float)w1 / area;
+                    float fw2 = (float)w2 / area;
+                    r = (uint8_t)(v0->r * fw0 + v1->r * fw1 + v2->r * fw2);
+                    g = (uint8_t)(v0->g * fw0 + v1->g * fw1 + v2->g * fw2);
+                    b = (uint8_t)(v0->b * fw0 + v1->b * fw1 + v2->b * fw2);
+                }
+
+                if (textured) {
+                    float fw0 = (float)w0 / area;
+                    float fw1 = (float)w1 / area;
+                    float fw2 = (float)w2 / area;
+                    int u = (int)(v0->u * fw0 + v1->u * fw1 + v2->u * fw2);
+                    int v = (int)(v0->v * fw0 + v1->v * fw1 + v2->v * fw2);
+                    uint16_t tex_c = ps1_gpu_sample_texture(gpu, u, v);
+                    if (tex_c == 0) continue; // Transparent color key
+
+                    uint8_t tr, tg, tb;
+                    ps1_color_to_rgb(tex_c, &tr, &tg, &tb);
+                    r = (uint8_t)((r * tr) >> 7);
+                    g = (uint8_t)((g * tg) >> 7);
+                    b = (uint8_t)((b * tb) >> 7);
+                }
+
+                blend_pixel(gpu, &gpu->vram[y % 512][x % 1024], r, g, b, semi_trans);
+            }
+        }
+    }
+}
+
+void ps1_gpu_clear_vram(PS1GPU* gpu, int16_t x, int16_t y, int16_t w, int16_t h, uint8_t r, uint8_t g, uint8_t b) {
+    uint16_t color = rgb_to_ps1_color(r, g, b, 0);
+    int x1 = x & 0x3F0; // 16-pixel aligned
+    int y1 = y & 0x1FF;
+    int x2 = MIN(x1 + (w & 0x3FF), 1024);
+    int y2 = MIN(y1 + (h & 0x1FF), 512);
+
+    for (int cy = y1; cy < y2; cy++) {
+        for (int cx = x1; cx < x2; cx++) {
+            gpu->vram[cy][cx] = color;
+        }
+    }
+}
+
+void ps1_gpu_draw_rect(PS1GPU* gpu, int16_t x, int16_t y, int16_t w, int16_t h, uint8_t r, uint8_t g, uint8_t b, uint8_t u, uint8_t v, bool textured, bool semi_trans) {
+    int x1 = MAX(x + gpu->draw_offset_x, gpu->clip_x1);
+    int y1 = MAX(y + gpu->draw_offset_y, gpu->clip_y1);
+    int x2 = MIN(x + gpu->draw_offset_x + w, gpu->clip_x2);
+    int y2 = MIN(y + gpu->draw_offset_y + h, gpu->clip_y2);
+
+    for (int cy = y1; cy < y2; cy++) {
+        for (int cx = x1; cx < x2; cx++) {
+            uint8_t pr = r, pg = g, pb = b;
+            if (textured) {
+                int cur_u = u + (cx - (x + gpu->draw_offset_x));
+                int cur_v = v + (cy - (y + gpu->draw_offset_y));
+                uint16_t tex = ps1_gpu_sample_texture(gpu, cur_u, cur_v);
+                if (tex == 0) continue;
+                uint8_t tr, tg, tb;
+                ps1_color_to_rgb(tex, &tr, &tg, &tb);
+                pr = (uint8_t)((pr * tr) >> 7);
+                pg = (uint8_t)((pg * tg) >> 7);
+                pb = (uint8_t)((pb * tb) >> 7);
+            }
+            blend_pixel(gpu, &gpu->vram[cy % 512][cx % 1024], pr, pg, pb, semi_trans);
+        }
+    }
+}
+
+void ps1_gpu_draw_line(PS1GPU* gpu, const PS1Vertex* v0, const PS1Vertex* v1, bool gouraud, bool semi_trans) {
+    // Bresenham's line algorithm
+    int x0 = v0->x + gpu->draw_offset_x;
+    int y0 = v0->y + gpu->draw_offset_y;
+    int x1 = v1->x + gpu->draw_offset_x;
+    int y1 = v1->y + gpu->draw_offset_y;
+
+    int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
+    int dy = -abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
+    int err = dx + dy, e2;
+
+    while (1) {
+        if (x0 >= gpu->clip_x1 && x0 <= gpu->clip_x2 && y0 >= gpu->clip_y1 && y0 <= gpu->clip_y2) {
+            blend_pixel(gpu, &gpu->vram[y0 % 512][x0 % 1024], v0->r, v0->g, v0->b, semi_trans);
+        }
+        if (x0 == x1 && y0 == y1) break;
+        e2 = 2 * err;
+        if (e2 >= dy) { err += dy; x0 += sx; }
+        if (e2 <= dx) { err += dx; y0 += sy; }
+    }
+}
+
+static void execute_gp0_packet(PS1GPU* gpu) {
+    uint8_t op = (gpu->gp0_fifo[0] >> 24) & 0xFF;
+    
+    // Fill Rectangle in VRAM
+    if (op == 0x02) {
+        uint8_t r = (uint8_t)(gpu->gp0_fifo[0] & 0xFF);
+        uint8_t g = (uint8_t)((gpu->gp0_fifo[0] >> 8) & 0xFF);
+        uint8_t b = (uint8_t)((gpu->gp0_fifo[0] >> 16) & 0xFF);
+        int16_t x = (int16_t)(gpu->gp0_fifo[1] & 0xFFFF);
+        int16_t y = (int16_t)(gpu->gp0_fifo[1] >> 16);
+        int16_t w = (int16_t)(gpu->gp0_fifo[2] & 0xFFFF);
+        int16_t h = (int16_t)(gpu->gp0_fifo[2] >> 16);
+        ps1_gpu_clear_vram(gpu, x, y, w, h, r, g, b);
+        return;
+    }
+
+    // Polygons
+    if (op >= 0x20 && op <= 0x3F) {
+        bool is_quad = (op & (1 << 3)) != 0;
+        bool is_textured = (op & (1 << 2)) != 0;
+        bool is_gouraud = (op & (1 << 4)) != 0;
+        bool semi_trans = (op & (1 << 1)) != 0;
+
+        PS1Vertex v[4];
+        memset(v, 0, sizeof(v));
+
+        int idx = 0;
+        uint8_t cr = (uint8_t)(gpu->gp0_fifo[0] & 0xFF);
+        uint8_t cg = (uint8_t)((gpu->gp0_fifo[0] >> 8) & 0xFF);
+        uint8_t cb = (uint8_t)((gpu->gp0_fifo[0] >> 16) & 0xFF);
+
+        int num_v = is_quad ? 4 : 3;
+        for (int i = 0; i < num_v; i++) {
+            if (is_gouraud) {
+                if (i > 0) {
+                    uint32_t c = gpu->gp0_fifo[idx++];
+                    cr = (uint8_t)(c & 0xFF);
+                    cg = (uint8_t)((c >> 8) & 0xFF);
+                    cb = (uint8_t)((c >> 16) & 0xFF);
+                } else {
+                    idx++;
+                }
+            } else if (i == 0) {
+                idx++;
+            }
+
+            v[i].r = cr; v[i].g = cg; v[i].b = cb;
+            uint32_t pos = gpu->gp0_fifo[idx++];
+            v[i].x = (int16_t)(pos & 0xFFFF) + gpu->draw_offset_x;
+            v[i].y = (int16_t)(pos >> 16) + gpu->draw_offset_y;
+
+            if (is_textured) {
+                uint32_t uv = gpu->gp0_fifo[idx++];
+                v[i].u = (uint8_t)(uv & 0xFF);
+                v[i].v = (uint8_t)((uv >> 8) & 0xFF);
+                if (i == 0) {
+                    gpu->clut_x = (uint16_t)(((uv >> 16) & 0x3F) * 16);
+                    gpu->clut_y = (uint16_t)((uv >> 22) & 0x1FF);
+                } else if (i == 1) {
+                    gpu->tex_page_x = (uint16_t)((uv >> 16) & 0x0F);
+                    gpu->tex_page_y = (uint16_t)((uv >> 20) & 0x01);
+                    gpu->semi_trans_mode = (uint8_t)((uv >> 21) & 0x03);
+                    gpu->tex_color_mode = (uint8_t)((uv >> 23) & 0x03);
+                }
+            }
+        }
+
+        ps1_gpu_draw_triangle(gpu, &v[0], &v[1], &v[2], is_textured, is_gouraud, semi_trans);
+        if (is_quad) {
+            ps1_gpu_draw_triangle(gpu, &v[1], &v[2], &v[3], is_textured, is_gouraud, semi_trans);
+        }
+        return;
+    }
+
+    // Rectangles / Sprites
+    if (op >= 0x60 && op <= 0x7F) {
+        bool is_textured = (op & (1 << 2)) != 0;
+        bool semi_trans = (op & (1 << 1)) != 0;
+        uint8_t r = (uint8_t)(gpu->gp0_fifo[0] & 0xFF);
+        uint8_t g = (uint8_t)((gpu->gp0_fifo[0] >> 8) & 0xFF);
+        uint8_t b = (uint8_t)((gpu->gp0_fifo[0] >> 16) & 0xFF);
+
+        int16_t x = (int16_t)(gpu->gp0_fifo[1] & 0xFFFF);
+        int16_t y = (int16_t)(gpu->gp0_fifo[1] >> 16);
+        uint8_t u = 0, v = 0;
+        int idx = 2;
+        if (is_textured) {
+            u = (uint8_t)(gpu->gp0_fifo[idx] & 0xFF);
+            v = (uint8_t)((gpu->gp0_fifo[idx] >> 8) & 0xFF);
+            gpu->clut_x = (uint16_t)(((gpu->gp0_fifo[idx] >> 16) & 0x3F) * 16);
+            gpu->clut_y = (uint16_t)((gpu->gp0_fifo[idx] >> 22) & 0x1FF);
+            idx++;
+        }
+
+        uint8_t size_type = (op >> 3) & 3;
+        int16_t w = 1, h = 1;
+        if (size_type == 1) { w = 1; h = 1; }
+        else if (size_type == 2) { w = 8; h = 8; }
+        else if (size_type == 3) { w = 16; h = 16; }
+        else {
+            w = (int16_t)(gpu->gp0_fifo[idx] & 0xFFFF);
+            h = (int16_t)(gpu->gp0_fifo[idx] >> 16);
+        }
+
+        ps1_gpu_draw_rect(gpu, x, y, w, h, r, g, b, u, v, is_textured, semi_trans);
+        return;
+    }
+
+    // CPU to VRAM
+    if (op >= 0xA0 && op <= 0xBF) {
+        gpu->transfer.x = (uint16_t)(gpu->gp0_fifo[1] & 0x3FF);
+        gpu->transfer.y = (uint16_t)((gpu->gp0_fifo[1] >> 16) & 0x1FF);
+        gpu->transfer.w = (uint16_t)(gpu->gp0_fifo[2] & 0xFFFF);
+        gpu->transfer.h = (uint16_t)(gpu->gp0_fifo[2] >> 16);
+        gpu->transfer.cur_x = gpu->transfer.x;
+        gpu->transfer.cur_y = gpu->transfer.y;
+        gpu->transfer.active = true;
+        gpu->transfer.is_read = false;
+        return;
+    }
+
+    // Draw Mode / Texpage
+    if (op == 0xE1) {
+        uint32_t val = gpu->gp0_fifo[0];
+        gpu->tex_page_x = (uint16_t)(val & 0x0F);
+        gpu->tex_page_y = (uint16_t)((val >> 4) & 0x01);
+        gpu->semi_trans_mode = (uint8_t)((val >> 5) & 0x03);
+        gpu->tex_color_mode = (uint8_t)((val >> 7) & 0x03);
+        gpu->dither_enable = (val & (1 << 9)) != 0;
+        gpu->tex_disable = (val & (1 << 11)) != 0;
+        return;
+    }
+
+    // Draw Area Top-Left
+    if (op == 0xE3) {
+        uint32_t val = gpu->gp0_fifo[0];
+        gpu->clip_x1 = (int16_t)(val & 0x3FF);
+        gpu->clip_y1 = (int16_t)((val >> 10) & 0x1FF);
+        return;
+    }
+
+    // Draw Area Bottom-Right
+    if (op == 0xE4) {
+        uint32_t val = gpu->gp0_fifo[0];
+        gpu->clip_x2 = (int16_t)(val & 0x3FF);
+        gpu->clip_y2 = (int16_t)((val >> 10) & 0x1FF);
+        return;
+    }
+
+    // Draw Offset
+    if (op == 0xE5) {
+        uint32_t val = gpu->gp0_fifo[0];
+        int16_t ox = (int16_t)(val & 0x7FF);
+        int16_t oy = (int16_t)((val >> 11) & 0x7FF);
+        if (ox & 0x400) ox |= 0xF800; // Sign extend 11-bit
+        if (oy & 0x400) oy |= 0xF800;
+        gpu->draw_offset_x = ox;
+        gpu->draw_offset_y = oy;
+        return;
+    }
+}
+
+void ps1_gpu_write_gp0(PS1GPU* gpu, uint32_t val) {
+    if (gpu->transfer.active && !gpu->transfer.is_read) {
+        uint16_t p0 = (uint16_t)(val & 0xFFFF);
+        uint16_t p1 = (uint16_t)(val >> 16);
+        
+        gpu->vram[gpu->transfer.cur_y % 512][gpu->transfer.cur_x % 1024] = p0;
+        gpu->transfer.cur_x++;
+        if (gpu->transfer.cur_x >= (gpu->transfer.x + gpu->transfer.w)) {
+            gpu->transfer.cur_x = gpu->transfer.x;
+            gpu->transfer.cur_y++;
+        }
+        
+        gpu->vram[gpu->transfer.cur_y % 512][gpu->transfer.cur_x % 1024] = p1;
+        gpu->transfer.cur_x++;
+        if (gpu->transfer.cur_x >= (gpu->transfer.x + gpu->transfer.w)) {
+            gpu->transfer.cur_x = gpu->transfer.x;
+            gpu->transfer.cur_y++;
+            if (gpu->transfer.cur_y >= (gpu->transfer.y + gpu->transfer.h)) {
+                gpu->transfer.active = false;
+            }
+        }
+        return;
+    }
+
+    if (gpu->gp0_fifo_len == 0) {
+        gpu->gp0_cmd = val;
+        gpu->gp0_words_needed = get_gp0_cmd_len(val);
+    }
+
+    gpu->gp0_fifo[gpu->gp0_fifo_len++] = val;
+    if (gpu->gp0_fifo_len >= gpu->gp0_words_needed) {
+        execute_gp0_packet(gpu);
+        gpu->gp0_fifo_len = 0;
+    }
+}
+
+void ps1_gpu_write_gp1(PS1GPU* gpu, uint32_t val) {
+    uint8_t cmd = (val >> 24) & 0xFF;
+    switch (cmd) {
+        case 0x00: // Reset GPU
+            ps1_gpu_reset(gpu);
+            break;
+        case 0x01: // Reset FIFO
+            gpu->gp0_fifo_len = 0;
+            break;
+        case 0x03: // Display Enable
+            gpu->disp_enable = (val & 1) == 0;
+            break;
+        case 0x05: // Display Start
+            gpu->disp_x = (int16_t)(val & 0x3FF);
+            gpu->disp_y = (int16_t)((val >> 10) & 0x1FF);
+            break;
+        case 0x08: // Display Mode
+            {
+                int hres_code = (val & 3) | ((val & (1 << 6)) >> 4);
+                if (hres_code == 0) gpu->disp_w = 256;
+                else if (hres_code == 1) gpu->disp_w = 320;
+                else if (hres_code == 2) gpu->disp_w = 512;
+                else if (hres_code == 3) gpu->disp_w = 640;
+                else if (hres_code == 4) gpu->disp_w = 368;
+                
+                gpu->disp_h = (val & (1 << 2)) ? 480 : 240;
+                gpu->is_pal = (val & (1 << 3)) != 0;
+                gpu->is_24bit = (val & (1 << 4)) != 0;
+            }
+            break;
+    }
+}
