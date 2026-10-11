@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 set -e
 
-# Usage: ./build_app_bundle.sh <binary_path> <app_name> <output_dir> [disc_path]
+# Usage: ./build_app_bundle.sh <binary_path> <app_name> <output_dir> [disc_path] [boot_exe]
 BINARY_PATH="${1:-build/MimiPS1}"
 APP_NAME="${2:-MimiPS1}"
 OUTPUT_DIR="${3:-build}"
 DISC_PATH="${4:-}"
+BOOT_EXE="${5:-}"
 
 APP_BUNDLE="${OUTPUT_DIR}/${APP_NAME}.app"
 MACOS_DIR="${APP_BUNDLE}/Contents/MacOS"
@@ -23,6 +24,12 @@ chmod +x "${MACOS_DIR}/${APP_NAME}"
 if [ -n "${DISC_PATH}" ] && [ -f "${DISC_PATH}" ]; then
     echo "==> Embedding game disc image into App Resources: $(basename "${DISC_PATH}")"
     cp "${DISC_PATH}" "${RESOURCES_DIR}/"
+fi
+
+# Optionally embed initial boot executable into App Resources
+if [ -n "${BOOT_EXE}" ] && [ -f "${BOOT_EXE}" ]; then
+    echo "==> Embedding boot executable into App Resources: boot.exe"
+    cp "${BOOT_EXE}" "${RESOURCES_DIR}/boot.exe"
 fi
 
 # Generate Info.plist

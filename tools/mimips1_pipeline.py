@@ -144,6 +144,7 @@ def recompile_exe(exe_path, output_dir):
     actual_exe = extract_boot_executable(exe_path, output_dir)
     print(f"⚙️  {BOLD}Analisando e recompilando binário MIPS...{RESET}")
     run_command(f"{RECOMPILER_BIN} \"{actual_exe}\" -o \"{output_dir}\"")
+    return actual_exe
 
 def compile_native_app(recompiled_dir, app_name):
     print(f"⚡ {BOLD}Compilando código nativo ARM64 com Apple Clang (-O3 -flto)...{RESET}")
@@ -184,12 +185,13 @@ def compile_native_app(recompiled_dir, app_name):
     run_command(cmd)
     return output_bin
 
-def package_bundle_and_dmg(bin_path, app_name, disc_path=None):
+def package_bundle_and_dmg(bin_path, app_name, disc_path=None, boot_exe=None):
     # 1. Create .app
     print(f"📦 {BOLD}Construindo pacote macOS {app_name}.app...{RESET}")
     app_script = os.path.join(ROOT_DIR, "tools", "build_app_bundle.sh")
     disc_arg = f'"{disc_path}"' if disc_path and os.path.isfile(disc_path) else '""'
-    run_command(f"chmod +x \"{app_script}\" && \"{app_script}\" \"{bin_path}\" \"{app_name}\" \"{BUILD_DIR}\" {disc_arg}", silent=True)
+    boot_arg = f'"{boot_exe}"' if boot_exe and os.path.isfile(boot_exe) else '""'
+    run_command(f"chmod +x \"{app_script}\" && \"{app_script}\" \"{bin_path}\" \"{app_name}\" \"{BUILD_DIR}\" {disc_arg} {boot_arg}", silent=True)
 
     # 2. Create .dmg
     print(f"💿 {BOLD}Empacotando instalador DMG com compressão UDZO...{RESET}")
@@ -212,7 +214,7 @@ def main():
     args = parser.parse_args()
     if args.command == "pipeline":
         print(f"▶️  {BOLD}[Passo 1/4] Processando e Recompilando MIPS R3000A:{RESET} {args.exe}")
-        recompile_exe(args.exe, args.output)
+        boot_exe = recompile_exe(args.exe, args.output)
 
         print(f"\n▶️  {BOLD}[Passo 2/4] Gerando Binário Nativo:{RESET} {args.name}")
         bin_path = compile_native_app(args.output, args.name)
@@ -221,7 +223,7 @@ def main():
         disc_to_embed = args.exe if (is_disc and args.embed_disc) else None
 
         print(f"\n▶️  {BOLD}[Passo 3/4] Empacotando Aplicativo e Instalador DMG...{RESET}")
-        package_bundle_and_dmg(bin_path, args.name, disc_path=disc_to_embed)
+        package_bundle_and_dmg(bin_path, args.name, disc_path=disc_to_embed, boot_exe=boot_exe)
 
         dmg_file = os.path.join(DIST_DIR, f"{args.name}-AppleSilicon.dmg")
         app_file = os.path.join(BUILD_DIR, f"{args.name}.app")
