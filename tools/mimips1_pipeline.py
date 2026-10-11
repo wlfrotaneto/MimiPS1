@@ -31,11 +31,107 @@ def ensure_recompiler_built():
         print("==> Building mimips1-recomp CLI tool first...")
         run_command(f"cmake -B {BUILD_DIR} -S {ROOT_DIR} && cmake --build {BUILD_DIR} --target mimips1-recomp")
 
+import struct
+
+def extract_boot_executable(file_path, output_dir):
+    """
+    Inspects a .bin, .cue, or .iso PS1 image.
+    If it's a disc image, parses ISO9660, reads SYSTEM.CNF,
+    extracts the main PS-X EXE to output_dir, and returns its path.
+    Otherwise returns file_path as is.
+    """
+    if not os.path.isfile(file_path):
+        return file_path
+
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext not in ['.iso', '.bin', '.img']:
+        return file_path
+
+    print(f"==> Inspecting CD-ROM disc image: {file_path}")
+    try:
+        with open(file_path, "rb") as f:
+            header = f.read(16)
+            is_raw = header.startswith(b"\x00\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\x00")
+            sector_size = 2352 if is_raw else 2048
+            data_offset = 24 if is_raw else 0
+
+            def read_sector(lba):
+                f.seek(lba * sector_size + data_offset)
+                return f.read(2048)
+
+            pvd = read_sector(16)
+            if b"CD001" not in pvd:
+                if is_raw:
+                    data_offset = 16
+                    pvd = read_sector(16)
+                if b"CD001" not in pvd:
+                    return file_path
+
+            root_rec = pvd[156:190]
+            root_lba = struct.unpack("<I", root_rec[2:6])[0]
+            root_size = struct.unpack("<I", root_rec[10:14])[0]
+
+            root_sectors = (root_size + 2047) // 2048
+            dir_data = b"".join(read_sector(root_lba + i) for i in range(root_sectors))[:root_size]
+
+            files = {}
+            pos = 0
+            while pos < len(dir_data):
+                length = dir_data[pos]
+                if length == 0:
+                    pos += 1
+                    continue
+                rec = dir_data[pos:pos+length]
+                ext_lba = struct.unpack("<I", rec[2:6])[0]
+                f_size = struct.unpack("<I", rec[10:14])[0]
+                name_len = rec[32]
+                name = rec[33:33+name_len].decode("ascii", errors="ignore").split(";")[0].upper()
+                files[name] = (ext_lba, f_size)
+                pos += length
+
+            target_exe = None
+            if "SYSTEM.CNF" in files:
+                cnf_lba, cnf_size = files["SYSTEM.CNF"]
+                cnf_sectors = (cnf_size + 2047) // 2048
+                cnf_content = b"".join(read_sector(cnf_lba + i) for i in range(cnf_sectors))[:cnf_size].decode("ascii", errors="ignore")
+                for line in cnf_content.splitlines():
+                    if line.strip().upper().startswith("BOOT"):
+                        parts = line.split("=")
+                        if len(parts) > 1:
+                            target_exe = parts[1].strip()
+                            target_exe = target_exe.replace("cdrom:\\", "").replace("cdrom:/", "").split(";")[0].strip().upper()
+                            break
+
+            if not target_exe:
+                for fname in files:
+                    if fname.endswith(".EXE") or fname.startswith("SLUS") or fname.startswith("SCES") or fname.startswith("SLES"):
+                        target_exe = fname
+                        break
+
+            if target_exe and target_exe in files:
+                exe_lba, exe_size = files[target_exe]
+                print(f"    [Disc Extractor] Found boot executable in SYSTEM.CNF: {target_exe} ({exe_size} bytes)")
+                exe_sectors = (exe_size + 2047) // 2048
+                exe_data = b"".join(read_sector(exe_lba + i) for i in range(exe_sectors))[:exe_size]
+
+                out_exe = os.path.join(output_dir, target_exe)
+                os.makedirs(output_dir, exist_ok=True)
+                with open(out_exe, "wb") as out_f:
+                    out_f.write(exe_data)
+                print(f"    [Disc Extractor] Successfully extracted {target_exe} to {out_exe}")
+                return out_exe
+
+    except Exception as e:
+        print(f"    [Notice] Automatic disc extraction skipped ({e})")
+
+    return file_path
+
 def recompile_exe(exe_path, output_dir):
     ensure_recompiler_built()
     os.makedirs(output_dir, exist_ok=True)
-    print(f"==> Recompiling PS1 executable: {exe_path}")
-    run_command(f"{RECOMPILER_BIN} \"{exe_path}\" -o \"{output_dir}\"")
+    actual_exe = extract_boot_executable(exe_path, output_dir)
+    print(f"==> Recompiling PS1 executable: {actual_exe}")
+    run_command(f"{RECOMPILER_BIN} \"{actual_exe}\" -o \"{output_dir}\"")
 
 def compile_native_app(recompiled_dir, app_name):
     print(f"==> Compiling native Apple Silicon ARM64 binary for {app_name}...")
