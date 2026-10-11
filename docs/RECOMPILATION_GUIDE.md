@@ -1,14 +1,14 @@
-# Guia Completo de Recompilação de Jogos de PS1 no Mac
+# Complete PS1 Game Recompilation Guide on macOS
 
-Este guia explica passo a passo como extrair o binário de um jogo de PlayStation 1 a partir de uma imagem `.iso` ou `.bin/.cue` e recompilá-lo em um arquivo `.dmg` nativo para macOS no Apple Silicon (Mac Mini M4).
+This guide provides step-by-step instructions for extracting the main boot binary from a PlayStation 1 disc image (`.iso` or `.bin/.cue`) and recompiling it into a native macOS `.dmg` installer for Apple Silicon (ARM64).
 
 ---
 
-## 1. Como obter o executável principal do jogo
+## 1. Locating the Main Boot Executable
 
-Nos discos de PlayStation 1, o executável principal é referenciado no arquivo de configuração `SYSTEM.CNF` na raiz do disco.
+On PlayStation 1 discs, the primary executable is specified in the `SYSTEM.CNF` configuration file located at the disc root.
 
-Exemplo de conteúdo do `SYSTEM.CNF`:
+Example `SYSTEM.CNF` contents:
 ```text
 BOOT = cdrom:\SLUS_000.67;1
 TCB = 4
@@ -16,37 +16,45 @@ EVENT = 16
 STACK = 801FFFF0
 ```
 
-Nesse exemplo, o arquivo `SLUS_000.67` (ou `SCES_xxx.xx`, `SLES_xxx.xx`, `PSX.EXE`) é o executável MIPS (`PS-X EXE`).
+In this example, `SLUS_000.67` (or similar naming schemes such as `SCES_xxx.xx`, `SLES_xxx.xx`, `SCUS_xxx.xx`, `PSX.EXE`) is the MIPS R3000A executable (`PS-X EXE`).
 
-Você pode extrair esse arquivo montando a imagem `.iso` ou usando ferramentas como `7z` ou `bchunk`:
+> **Note:** The MimiPS1 automated pipeline (`tools/mimips1_pipeline.py`) automatically parses the disc image, reads `SYSTEM.CNF`, and extracts the boot executable without requiring manual extraction.
+
+If manual extraction is desired:
 ```bash
-# Se tiver o bin/cue:
-7z x jogo.iso SLUS_000.67
+# Using 7z on an ISO image:
+7z x game.iso SLUS_000.67
 ```
 
 ---
 
-## 2. Recompilando o jogo com o MimiPS1
+## 2. Recompiling with MimiPS1
 
-Com o arquivo executável em mãos (por exemplo, `SLUS_000.67`):
+Once you have the executable or disc image ready:
 
-### Método Automático (1 comando):
+### Automated Pipeline (Single Command):
+
 ```bash
-python3 tools/mimips1_pipeline.py pipeline SLUS_000.67 --name "MeuJogoPS1"
+# Recompiling from a disc image or extracted executable:
+python3 tools/mimips1_pipeline.py pipeline path/to/game.bin --name "GameTitle"
 ```
 
-O comando fará tudo:
-1. Recompilará o código MIPS para C.
-2. Compilará o binário nativo ARM64 usando o compilador Apple Clang otimizado para o M4.
-3. Criará o pacote `MeuJogoPS1.app`.
-4. Gerará o instalador `dist/MeuJogoPS1-AppleSilicon.dmg`.
+To create a standalone distribution bundle with the disc image embedded into `Contents/Resources/`:
+```bash
+python3 tools/mimips1_pipeline.py pipeline path/to/game.bin --name "GameTitle" --embed-disc
+```
+
+This single command executes the entire pipeline:
+1. Disassembles and transpiles MIPS R3000A machine code to structured C.
+2. Compiles a native ARM64 Mach-O binary using Apple Clang (`-O3 -flto`).
+3. Packages the native macOS `GameTitle.app` bundle.
+4. Generates a compressed installer at `dist/GameTitle-AppleSilicon.dmg`.
 
 ---
 
-## 3. Instalando e Jogando no Mac
+## 3. Installing and Running on macOS
 
-1. Dê um duplo clique no arquivo `.dmg` gerado na pasta `dist/`.
-2. Uma janela nativa do macOS se abrirá mostrando o ícone do jogo e um atalho para a pasta **Applications**.
-3. Arraste o ícone do jogo para a pasta **Applications**.
-4. Conecte seu controle de PS5 (DualSense), PS4, Xbox ou Switch via Bluetooth.
-5. Abra o jogo diretamente pelo Launchpad ou Spotlight. O jogo rodará nativamente a 60 FPS com Metal e CoreAudio!
+1. Double-click the generated `.dmg` file in the `dist/` directory.
+2. Drag the game application icon into the **Applications** folder shortcut.
+3. Connect a gamepad (DualSense PS5, DualShock 4, Xbox Wireless, or Nintendo Switch Pro) via Bluetooth or USB.
+4. Launch the application via Spotlight or Launchpad. The title executes natively with Metal hardware acceleration and low-latency CoreAudio.

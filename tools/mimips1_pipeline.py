@@ -39,18 +39,18 @@ def run_command(cmd, cwd=ROOT_DIR, silent=False):
     if res.returncode != 0:
         if silent:
             print(res.stderr.decode("utf-8", errors="ignore"))
-        print(f"\n❌ [Erro] Falha ao executar comando (código {res.returncode})")
+        print(f"\n❌ [Error] Command execution failed (exit code {res.returncode})")
         sys.exit(res.returncode)
 
 def ensure_recompiler_built():
     if not os.path.isfile(RECOMPILER_BIN):
-        print(f"{YELLOW}⚙️  Compilando a ferramenta mimips1-recomp...{RESET}")
+        print(f"{YELLOW}⚙️  Building mimips1-recomp tool...{RESET}")
         run_command(f"cmake -B {BUILD_DIR} -S {ROOT_DIR} && cmake --build {BUILD_DIR} --target mimips1-recomp", silent=True)
 
 def extract_boot_executable(file_path, output_dir):
     """
-    Inspeciona se o arquivo é imagem de disco (.bin, .cue, .iso).
-    Se for, extrai automaticamente o executável referenciado no SYSTEM.CNF.
+    Inspects disc image (.bin, .cue, .iso).
+    If detected, automatically extracts the boot executable referenced in SYSTEM.CNF.
     """
     if not os.path.isfile(file_path):
         return file_path
@@ -59,7 +59,7 @@ def extract_boot_executable(file_path, output_dir):
     if ext not in ['.iso', '.bin', '.img']:
         return file_path
 
-    print(f"💿 {BLUE}Inspecionando imagem de CD-ROM:{RESET} {os.path.basename(file_path)}")
+    print(f"💿 {BLUE}Inspecting CD-ROM disc image:{RESET} {os.path.basename(file_path)}")
     try:
         with open(file_path, "rb") as f:
             header = f.read(16)
@@ -116,13 +116,13 @@ def extract_boot_executable(file_path, output_dir):
 
             if not target_exe:
                 for fname in files:
-                    if fname.endswith(".EXE") or fname.startswith("SLUS") or fname.startswith("SCES") or fname.startswith("SLES"):
+                    if fname.endswith(".EXE") or fname.startswith("SLUS") or fname.startswith("SCES") or fname.startswith("SLES") or fname.startswith("SCUS"):
                         target_exe = fname
                         break
 
             if target_exe and target_exe in files:
                 exe_lba, exe_size = files[target_exe]
-                print(f"   🔍 Executável de boot detectado: {BOLD}{target_exe}{RESET} ({exe_size} bytes)")
+                print(f"   🔍 Boot executable detected: {BOLD}{target_exe}{RESET} ({exe_size} bytes)")
                 exe_sectors = (exe_size + 2047) // 2048
                 exe_data = b"".join(read_sector(exe_lba + i) for i in range(exe_sectors))[:exe_size]
 
@@ -130,11 +130,11 @@ def extract_boot_executable(file_path, output_dir):
                 os.makedirs(output_dir, exist_ok=True)
                 with open(out_exe, "wb") as out_f:
                     out_f.write(exe_data)
-                print(f"   ✅ Executável extraído com sucesso para: {out_exe}")
+                print(f"   ✅ Boot executable extracted successfully: {out_exe}")
                 return out_exe
 
     except Exception as e:
-        print(f"   ⚠️  Extração automática de ISO ignorada ({e})")
+        print(f"   ⚠️  Automatic ISO extraction skipped ({e})")
 
     return file_path
 
@@ -142,12 +142,12 @@ def recompile_exe(exe_path, output_dir):
     ensure_recompiler_built()
     os.makedirs(output_dir, exist_ok=True)
     actual_exe = extract_boot_executable(exe_path, output_dir)
-    print(f"⚙️  {BOLD}Analisando e recompilando binário MIPS...{RESET}")
+    print(f"⚙️  {BOLD}Analyzing and decompiling MIPS binary...{RESET}")
     run_command(f"{RECOMPILER_BIN} \"{actual_exe}\" -o \"{output_dir}\"")
     return actual_exe
 
 def compile_native_app(recompiled_dir, app_name):
-    print(f"⚡ {BOLD}Compilando código nativo ARM64 com Apple Clang (-O3 -flto)...{RESET}")
+    print(f"⚡ {BOLD}Compiling native ARM64 binary with Apple Clang (-O3 -flto)...{RESET}")
     runtime_inc = os.path.join(ROOT_DIR, "runtime", "include")
     runtime_src_dir = os.path.join(ROOT_DIR, "runtime", "src")
     platform_dir = os.path.join(runtime_src_dir, "platform")
@@ -187,14 +187,14 @@ def compile_native_app(recompiled_dir, app_name):
 
 def package_bundle_and_dmg(bin_path, app_name, disc_path=None, boot_exe=None):
     # 1. Create .app
-    print(f"📦 {BOLD}Construindo pacote macOS {app_name}.app...{RESET}")
+    print(f"📦 {BOLD}Building macOS app bundle: {app_name}.app...{RESET}")
     app_script = os.path.join(ROOT_DIR, "tools", "build_app_bundle.sh")
     disc_arg = f'"{disc_path}"' if disc_path and os.path.isfile(disc_path) else '""'
     boot_arg = f'"{boot_exe}"' if boot_exe and os.path.isfile(boot_exe) else '""'
     run_command(f"chmod +x \"{app_script}\" && \"{app_script}\" \"{bin_path}\" \"{app_name}\" \"{BUILD_DIR}\" {disc_arg} {boot_arg}", silent=True)
 
     # 2. Create .dmg
-    print(f"💿 {BOLD}Empacotando instalador DMG com compressão UDZO...{RESET}")
+    print(f"💿 {BOLD}Packaging DMG installer with UDZO compression...{RESET}")
     dmg_script = os.path.join(ROOT_DIR, "tools", "package_dmg.sh")
     app_path = os.path.join(BUILD_DIR, f"{app_name}.app")
     run_command(f"chmod +x \"{dmg_script}\" && \"{dmg_script}\" \"{app_path}\" \"{app_name}-AppleSilicon\" \"{DIST_DIR}\"", silent=True)
@@ -205,33 +205,33 @@ def main():
     parser = argparse.ArgumentParser(description="MimiPS1 Recompilation Pipeline for macOS (Apple Silicon)")
     subparsers = parser.add_subparsers(dest="command")
 
-    recomp_p = subparsers.add_parser("pipeline", help="Executa o pipeline completo: Recompilação + Compilação Nativa + DMG")
-    recomp_p.add_argument("exe", help="Caminho do arquivo (.EXE, .BIN ou .ISO)")
-    recomp_p.add_argument("--name", default="PS1RecompiledGame", help="Nome do aplicativo macOS")
-    recomp_p.add_argument("--output", default=os.path.join(BUILD_DIR, "recompiled"), help="Pasta de saída do código C")
-    recomp_p.add_argument("--embed-disc", action="store_true", help="Incorpora a imagem de CD (.bin/.iso) no bundle final")
+    recomp_p = subparsers.add_parser("pipeline", help="Run full pipeline: Recompilation + Native Clang Build + DMG Packaging")
+    recomp_p.add_argument("exe", help="Path to executable or disc image (.EXE, .BIN, .ISO)")
+    recomp_p.add_argument("--name", default="PS1RecompiledGame", help="macOS application name")
+    recomp_p.add_argument("--output", default=os.path.join(BUILD_DIR, "recompiled"), help="Output directory for generated C source")
+    recomp_p.add_argument("--embed-disc", action="store_true", help="Embed CD disc image (.bin/.iso) into final app bundle")
 
     args = parser.parse_args()
     if args.command == "pipeline":
-        print(f"▶️  {BOLD}[Passo 1/4] Processando e Recompilando MIPS R3000A:{RESET} {args.exe}")
+        print(f"▶️  {BOLD}[Step 1/3] Processing and Recompiling MIPS R3000A:{RESET} {args.exe}")
         boot_exe = recompile_exe(args.exe, args.output)
 
-        print(f"\n▶️  {BOLD}[Passo 2/4] Gerando Binário Nativo:{RESET} {args.name}")
+        print(f"\n▶️  {BOLD}[Step 2/3] Building Native Binary:{RESET} {args.name}")
         bin_path = compile_native_app(args.output, args.name)
 
         is_disc = os.path.isfile(args.exe) and os.path.splitext(args.exe)[1].lower() in ['.bin', '.iso', '.img']
         disc_to_embed = args.exe if (is_disc and args.embed_disc) else None
 
-        print(f"\n▶️  {BOLD}[Passo 3/4] Empacotando Aplicativo e Instalador DMG...{RESET}")
+        print(f"\n▶️  {BOLD}[Step 3/3] Packaging App Bundle and DMG Installer...{RESET}")
         package_bundle_and_dmg(bin_path, args.name, disc_path=disc_to_embed, boot_exe=boot_exe)
 
         dmg_file = os.path.join(DIST_DIR, f"{args.name}-AppleSilicon.dmg")
         app_file = os.path.join(BUILD_DIR, f"{args.name}.app")
 
         print(f"\n{GREEN}{BOLD}═══════════════════════════════════════════════════════════════{RESET}")
-        print(f"{GREEN}{BOLD}✨ Pipeline Concluído com Sucesso!{RESET}")
-        print(f"📦 {BOLD}Aplicativo Nativo:{RESET} {app_file}")
-        print(f"💿 {BOLD}Instalador DMG:{RESET}    {dmg_file}")
+        print(f"{GREEN}{BOLD}✨ Pipeline Completed Successfully!{RESET}")
+        print(f"📦 {BOLD}Native App:{RESET}      {app_file}")
+        print(f"💿 {BOLD}DMG Installer:{RESET}   {dmg_file}")
         print(f"{GREEN}{BOLD}═══════════════════════════════════════════════════════════════{RESET}\n")
     else:
         parser.print_help()

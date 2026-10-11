@@ -5,7 +5,7 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_OSX_ARCHITECTURES "arm64")
 
-# Compiler optimization flags for Apple Silicon M4
+# Compiler optimization flags for Apple Silicon (ARM64)
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3 -Wall -Wextra -Wno-unused-parameter")
 set(CMAKE_OBJC_FLAGS "${CMAKE_OBJC_FLAGS} -O3 -Wall -Wextra -Wno-unused-parameter -fobjc-arc")
 
