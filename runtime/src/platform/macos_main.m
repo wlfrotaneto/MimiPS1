@@ -118,7 +118,7 @@ int run_native_macos_app(PS1Context* ctx, const char* window_title) {
                                                                   NSWindowStyleMaskResizable)
                                                          backing:NSBackingStoreBuffered
                                                            defer:NO];
-        [window setTitle:[NSString stringWithFormat:@"%@ [Native Apple Silicon M4]", appName]];
+        [window setTitle:[NSString stringWithFormat:@"%@ [Apple Silicon]", appName]];
         [window center];
 
         // Create Metal View

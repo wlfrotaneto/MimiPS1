@@ -2,6 +2,7 @@
 #import <Metal/Metal.h>
 #import <MetalKit/MetalKit.h>
 #import <GameController/GameController.h>
+#import <simd/simd.h>
 #include "mimips1_runtime.h"
 
 // Metal Shading Language source embedded as string
@@ -14,9 +15,14 @@ static const char* metal_shader_src =
 "    float2 uv;\n"
 "};\n"
 "\n"
-"vertex VertexOut vertex_main(uint vertexID [[vertex_id]]) {\n"
+"vertex VertexOut vertex_main(uint vertexID [[vertex_id]], constant float4& uv_bounds [[buffer(0)]]) {\n"
 "    float2 pos[4] = { float2(-1, 1), float2(-1, -1), float2(1, 1), float2(1, -1) };\n"
-"    float2 uvs[4] = { float2(0, 0), float2(0, 1), float2(1, 0), float2(1, 1) };\n"
+"    float2 uvs[4] = {\n"
+"        float2(uv_bounds.x, uv_bounds.y),\n"
+"        float2(uv_bounds.x, uv_bounds.w),\n"
+"        float2(uv_bounds.z, uv_bounds.y),\n"
+"        float2(uv_bounds.z, uv_bounds.w)\n"
+"    };\n"
 "    VertexOut out;\n"
 "    out.position = float4(pos[vertexID], 0.0, 1.0);\n"
 "    out.uv = uvs[vertexID];\n"
@@ -29,7 +35,6 @@ static const char* metal_shader_src =
 "                             constant int& crt_mode [[buffer(0)]]) {\n"
 "    float4 color = tex.sample(smp, in.uv);\n"
 "    if (crt_mode == 1) {\n"
-"        // Subtle CRT scanline effect\n"
 "        float scanline = sin(in.uv.y * 480.0 * 3.14159) * 0.08;\n"
 "        color.rgb -= scanline;\n"
 "    }\n"
@@ -125,6 +130,19 @@ static const char* metal_shader_src =
         [encoder setFragmentTexture:_vramTexture atIndex:0];
         [encoder setFragmentSamplerState:_samplerState atIndex:0];
         
+        int disp_x = _context->gpu.disp_x;
+        int disp_y = _context->gpu.disp_y;
+        int disp_w = _context->gpu.disp_w > 0 ? _context->gpu.disp_w : 320;
+        int disp_h = _context->gpu.disp_h > 0 ? _context->gpu.disp_h : 240;
+
+        simd_float4 uv_bounds = simd_make_float4(
+            (float)disp_x / (float)PS1_VRAM_WIDTH,
+            (float)disp_y / (float)PS1_VRAM_HEIGHT,
+            (float)(disp_x + disp_w) / (float)PS1_VRAM_WIDTH,
+            (float)(disp_y + disp_h) / (float)PS1_VRAM_HEIGHT
+        );
+        [encoder setVertexBytes:&uv_bounds length:sizeof(simd_float4) atIndex:0];
+
         int crt = _context->crt_scanlines ? 1 : 0;
         [encoder setFragmentBytes:&crt length:sizeof(int) atIndex:0];
 

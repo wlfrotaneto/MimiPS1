@@ -9,7 +9,7 @@
 static void print_banner(void) {
     printf("===============================================================\n");
     printf(" MimiPS1-Recomp - Next-Gen Ahead-of-Time Static Recompiler\n");
-    printf(" PlayStation 1 (MIPS R3000A) -> Native Apple Silicon ARM64 (M4)\n");
+    printf(" PlayStation 1 (MIPS R3000A) -> Native Apple Silicon (ARM64)\n");
     printf("===============================================================\n\n");
 }
 

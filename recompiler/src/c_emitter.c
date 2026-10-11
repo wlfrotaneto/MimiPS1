@@ -227,6 +227,7 @@ bool mips_emit_c_code(const MipsProgram* prog, const EmitterOptions* opts) {
     fn = prog->first_func;
     while (fn) {
         fprintf(fc, "void %s(PS1Context* ctx) {\n", fn->name);
+        fprintf(fc, "    int _slice_budget = 20000;\n");
 
         MipsBlock* blk = fn->first_block;
         while (blk) {
@@ -287,6 +288,9 @@ bool mips_emit_c_code(const MipsProgram* prog, const EmitterOptions* opts) {
                     fprintf(fc, "    bool _take_branch = %s;\n", cond_expr);
                     fprintf(fc, "loc_%08x:\n", ds->pc);
                     emit_instruction_c(fc, ds); // Execute delay slot
+                    if (br->target <= br->pc) {
+                        fprintf(fc, "    if (_take_branch && --_slice_budget <= 0) { ctx->cpu.pc = 0x%08X; return; }\n", br->target);
+                    }
                     if (br->target >= fn->entry_pc && br->target < fn->end_pc) {
                         fprintf(fc, "    if (_take_branch) goto loc_%08x;\n", br->target);
                     } else {
@@ -315,6 +319,9 @@ bool mips_emit_c_code(const MipsProgram* prog, const EmitterOptions* opts) {
                 else if (br->id == MIPS_OP_J) {
                     fprintf(fc, "loc_%08x:\n", ds->pc);
                     emit_instruction_c(fc, ds); // Execute delay slot
+                    if (br->target <= br->pc) {
+                        fprintf(fc, "    if (--_slice_budget <= 0) { ctx->cpu.pc = 0x%08X; return; }\n", br->target);
+                    }
                     if (br->target >= fn->entry_pc && br->target < fn->end_pc) {
                         fprintf(fc, "    goto loc_%08x;\n", br->target);
                     } else {
@@ -344,6 +351,12 @@ bool mips_emit_c_code(const MipsProgram* prog, const EmitterOptions* opts) {
         fprintf(fc, "    ps1_register_function(ctx, 0x%08X, %s);\n", fn->entry_pc, fn->name);
         fn = fn->next;
     }
+    fprintf(fc, "    if (ctx->cpu.pc == 0) {\n");
+    fprintf(fc, "        ctx->cpu.pc = 0x%08X;\n", prog->entry_pc);
+    fprintf(fc, "        ctx->cpu.r[28] = 0x80018000;\n");
+    fprintf(fc, "        ctx->cpu.r[29] = 0x801FFFF0;\n");
+    fprintf(fc, "        ctx->cpu.r[30] = 0x801FFFF0;\n");
+    fprintf(fc, "    }\n");
     fprintf(fc, "}\n\n");
 
     fprintf(fc, "void ps1_run_recompiled_game(PS1Context* ctx) {\n");
