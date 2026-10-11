@@ -228,6 +228,7 @@ bool mips_emit_c_code(const MipsProgram* prog, const EmitterOptions* opts) {
     while (fn) {
         fprintf(fc, "void %s(PS1Context* ctx) {\n", fn->name);
         fprintf(fc, "    int _slice_budget = 20000;\n");
+        fprintf(fc, "    bool _take_branch = false;\n");
 
         MipsBlock* blk = fn->first_block;
         while (blk) {
@@ -285,7 +286,7 @@ bool mips_emit_c_code(const MipsProgram* prog, const EmitterOptions* opts) {
                         fprintf(fc, "    R(31) = 0x%08X;\n", br->pc + 8);
                     }
 
-                    fprintf(fc, "    bool _take_branch = %s;\n", cond_expr);
+                    fprintf(fc, "    _take_branch = %s;\n", cond_expr);
                     fprintf(fc, "loc_%08x:\n", ds->pc);
                     emit_instruction_c(fc, ds); // Execute delay slot
                     if (br->target <= br->pc) {

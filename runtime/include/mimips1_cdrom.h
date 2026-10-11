@@ -25,6 +25,9 @@ struct PS1CDROM {
     FILE*    image_file;
     char     image_path[512];
     uint32_t total_sectors;
+    bool     is_raw;
+    uint32_t sector_size;
+    uint32_t data_offset;
 
     uint8_t  status;
     uint8_t  mode;

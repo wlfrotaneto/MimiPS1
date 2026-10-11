@@ -184,11 +184,12 @@ def compile_native_app(recompiled_dir, app_name):
     run_command(cmd)
     return output_bin
 
-def package_bundle_and_dmg(bin_path, app_name):
+def package_bundle_and_dmg(bin_path, app_name, disc_path=None):
     # 1. Create .app
     print(f"📦 {BOLD}Construindo pacote macOS {app_name}.app...{RESET}")
     app_script = os.path.join(ROOT_DIR, "tools", "build_app_bundle.sh")
-    run_command(f"chmod +x \"{app_script}\" && \"{app_script}\" \"{bin_path}\" \"{app_name}\" \"{BUILD_DIR}\"", silent=True)
+    disc_arg = f'"{disc_path}"' if disc_path and os.path.isfile(disc_path) else '""'
+    run_command(f"chmod +x \"{app_script}\" && \"{app_script}\" \"{bin_path}\" \"{app_name}\" \"{BUILD_DIR}\" {disc_arg}", silent=True)
 
     # 2. Create .dmg
     print(f"💿 {BOLD}Empacotando instalador DMG com compressão UDZO...{RESET}")
@@ -206,6 +207,7 @@ def main():
     recomp_p.add_argument("exe", help="Caminho do arquivo (.EXE, .BIN ou .ISO)")
     recomp_p.add_argument("--name", default="PS1RecompiledGame", help="Nome do aplicativo macOS")
     recomp_p.add_argument("--output", default=os.path.join(BUILD_DIR, "recompiled"), help="Pasta de saída do código C")
+    recomp_p.add_argument("--embed-disc", action="store_true", help="Incorpora a imagem de CD (.bin/.iso) no bundle final")
 
     args = parser.parse_args()
     if args.command == "pipeline":
@@ -215,8 +217,11 @@ def main():
         print(f"\n▶️  {BOLD}[Passo 2/4] Gerando Binário Nativo:{RESET} {args.name}")
         bin_path = compile_native_app(args.output, args.name)
 
+        is_disc = os.path.isfile(args.exe) and os.path.splitext(args.exe)[1].lower() in ['.bin', '.iso', '.img']
+        disc_to_embed = args.exe if (is_disc and args.embed_disc) else None
+
         print(f"\n▶️  {BOLD}[Passo 3/4] Empacotando Aplicativo e Instalador DMG...{RESET}")
-        package_bundle_and_dmg(bin_path, args.name)
+        package_bundle_and_dmg(bin_path, args.name, disc_path=disc_to_embed)
 
         dmg_file = os.path.join(DIST_DIR, f"{args.name}-AppleSilicon.dmg")
         app_file = os.path.join(BUILD_DIR, f"{args.name}.app")

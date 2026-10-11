@@ -35,6 +35,25 @@ int main(int argc, char** argv) {
             ps1_runtime_load_exe(ctx, file_arg);
         }
         app_name = file_arg;
+    } else {
+        // Check for embedded disc image in bundle Resources
+        @autoreleasepool {
+            NSBundle* bundle = [NSBundle mainBundle];
+            NSString* resPath = [bundle resourcePath];
+            if (resPath) {
+                NSFileManager* fm = [NSFileManager defaultManager];
+                NSArray* entries = [fm contentsOfDirectoryAtPath:resPath error:nil];
+                for (NSString* entry in entries) {
+                    NSString* ext = [entry.pathExtension lowercaseString];
+                    if ([ext isEqualToString:@"bin"] || [ext isEqualToString:@"iso"] || [ext isEqualToString:@"img"]) {
+                        NSString* full = [resPath stringByAppendingPathComponent:entry];
+                        printf("[MimiPS1] Auto-mounting game disc from bundle: %s\n", [full UTF8String]);
+                        ps1_cdrom_open_image(&ctx->cdrom, [full UTF8String]);
+                        break;
+                    }
+                }
+            }
+        }
     }
 
     printf("[MimiPS1] Launching native Apple Silicon Metal window...\n");

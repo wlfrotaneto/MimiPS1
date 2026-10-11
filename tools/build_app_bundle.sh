@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 set -e
 
-# Usage: ./build_app_bundle.sh <binary_path> <app_name> <output_dir>
+# Usage: ./build_app_bundle.sh <binary_path> <app_name> <output_dir> [disc_path]
 BINARY_PATH="${1:-build/MimiPS1}"
 APP_NAME="${2:-MimiPS1}"
 OUTPUT_DIR="${3:-build}"
+DISC_PATH="${4:-}"
 
 APP_BUNDLE="${OUTPUT_DIR}/${APP_NAME}.app"
 MACOS_DIR="${APP_BUNDLE}/Contents/MacOS"
@@ -17,6 +18,12 @@ mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}"
 # Copy native binary
 cp "${BINARY_PATH}" "${MACOS_DIR}/${APP_NAME}"
 chmod +x "${MACOS_DIR}/${APP_NAME}"
+
+# Optionally embed disc image for self-contained games
+if [ -n "${DISC_PATH}" ] && [ -f "${DISC_PATH}" ]; then
+    echo "==> Embedding game disc image into App Resources: $(basename "${DISC_PATH}")"
+    cp "${DISC_PATH}" "${RESOURCES_DIR}/"
+fi
 
 # Generate Info.plist
 cat << EOF > "${APP_BUNDLE}/Contents/Info.plist"

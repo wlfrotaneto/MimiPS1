@@ -5,6 +5,7 @@
 void ps1_cdrom_init(PS1CDROM* cdrom) {
     memset(cdrom, 0, sizeof(PS1CDROM));
     cdrom->status = CD_STAT_SPINDLE_ON;
+    cdrom->sector_size = CDROM_SECTOR_SIZE_DATA;
 }
 
 void ps1_cdrom_reset(PS1CDROM* cdrom) {
@@ -23,11 +24,26 @@ bool ps1_cdrom_open_image(PS1CDROM* cdrom, const char* path) {
     if (!cdrom->image_file) return false;
 
     strncpy(cdrom->image_path, path, sizeof(cdrom->image_path) - 1);
+
+    // Check if RAW sector image (sync pattern 00 FF FF ... 00)
+    uint8_t header[16];
+    size_t hr = fread(header, 1, 16, cdrom->image_file);
+    const uint8_t sync[12] = { 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00 };
+    if (hr >= 16 && memcmp(header, sync, 12) == 0) {
+        cdrom->is_raw = true;
+        cdrom->sector_size = CDROM_SECTOR_SIZE_RAW; // 2352
+        cdrom->data_offset = 24; // Mode 2 Form 1 data starts at byte 24
+    } else {
+        cdrom->is_raw = false;
+        cdrom->sector_size = CDROM_SECTOR_SIZE_DATA; // 2048
+        cdrom->data_offset = 0;
+    }
+
     fseek(cdrom->image_file, 0, SEEK_END);
     long size = ftell(cdrom->image_file);
     fseek(cdrom->image_file, 0, SEEK_SET);
 
-    cdrom->total_sectors = (uint32_t)(size / CDROM_SECTOR_SIZE_DATA);
+    cdrom->total_sectors = (uint32_t)(size / cdrom->sector_size);
     return true;
 }
 
@@ -130,7 +146,7 @@ void ps1_cdrom_tick(PS1Context* ctx, uint32_t cycles) {
     PS1CDROM* cd = &ctx->cdrom;
     if (cd->reading && cd->image_file) {
         // Read sector
-        long offset = (long)cd->current_lba * CDROM_SECTOR_SIZE_DATA;
+        long offset = (long)cd->current_lba * cd->sector_size + cd->data_offset;
         fseek(cd->image_file, offset, SEEK_SET);
         size_t r = fread(cd->data_fifo, 1, CDROM_SECTOR_SIZE_DATA, cd->image_file);
         if (r > 0) {
