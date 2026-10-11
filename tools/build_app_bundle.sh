@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 set -e
 
-# Usage: ./build_app_bundle.sh <binary_path> <app_name> <output_dir> [disc_path] [boot_exe]
+# Usage: ./build_app_bundle.sh <binary_path> <app_name> <output_dir> [disc_path] [boot_exe] [bios_path]
 BINARY_PATH="${1:-build/MimiPS1}"
 APP_NAME="${2:-MimiPS1}"
 OUTPUT_DIR="${3:-build}"
 DISC_PATH="${4:-}"
 BOOT_EXE="${5:-}"
+BIOS_PATH="${6:-}"
 
 APP_BUNDLE="${OUTPUT_DIR}/${APP_NAME}.app"
 MACOS_DIR="${APP_BUNDLE}/Contents/MacOS"
@@ -30,6 +31,12 @@ fi
 if [ -n "${BOOT_EXE}" ] && [ -f "${BOOT_EXE}" ]; then
     echo "==> Embedding boot executable into App Resources: boot.exe"
     cp "${BOOT_EXE}" "${RESOURCES_DIR}/boot.exe"
+fi
+
+# Optionally embed PS1 BIOS into App Resources
+if [ -n "${BIOS_PATH}" ] && [ -f "${BIOS_PATH}" ]; then
+    echo "==> Embedding PS1 BIOS into App Resources: bios.bin"
+    cp "${BIOS_PATH}" "${RESOURCES_DIR}/bios.bin"
 fi
 
 # Generate Info.plist

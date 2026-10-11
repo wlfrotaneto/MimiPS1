@@ -39,6 +39,7 @@ bool ps1_bios_handle_syscall(PS1Context* ctx);
 bool ps1_bios_handle_a0(PS1Context* ctx, uint32_t func);
 bool ps1_bios_handle_b0(PS1Context* ctx, uint32_t func);
 bool ps1_bios_handle_c0(PS1Context* ctx, uint32_t func);
+void ps1_bios_deliver_event(PS1Context* ctx, uint32_t class_id, uint32_t spec);
 
 #ifdef __cplusplus
 }

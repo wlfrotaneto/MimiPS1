@@ -98,6 +98,19 @@ void ps1_trigger_irq(PS1Context* ctx, uint32_t irq_bit) {
         // Assert Interrupt Request in COP0 Cause Register
         ctx->cpu.cop0[COP0_CAUSE] |= (1 << 10);
     }
+
+    // Deliver corresponding BIOS events to waiting game loops and callbacks
+    if (irq_bit & IRQ_VBLANK) {
+        ps1_bios_deliver_event(ctx, 0xF0000001, 0x0001); // V-Blank event
+    }
+    if (irq_bit & IRQ_CDROM) {
+        ps1_bios_deliver_event(ctx, 0xF0000003, 0x0020); // CD Complete event
+        ps1_bios_deliver_event(ctx, 0xF0000003, 0x0010); // CD Data Ready event
+        ps1_bios_deliver_event(ctx, 0xF0000003, 0x0000); // Any CD event
+    }
+    if (irq_bit & IRQ_DMA) {
+        ps1_bios_deliver_event(ctx, 0xF0000002, 0x0001); // DMA Complete event
+    }
 }
 
 void ps1_runtime_run_frame(PS1Context* ctx) {

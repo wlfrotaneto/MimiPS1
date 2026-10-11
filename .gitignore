@@ -9,3 +9,17 @@ recompiled/
 *.swp
 *.pyc
 __pycache__/
+
+# ROMs, Disc Images & BIOS dumps (Never commit copyrighted assets)
+*.bin
+*.BIN
+*.cue
+*.CUE
+*.iso
+*.ISO
+*.img
+*.rom
+*.ROM
+bios/
+roms/
+scratch/

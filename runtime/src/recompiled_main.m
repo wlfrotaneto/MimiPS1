@@ -24,23 +24,49 @@ int main(int argc, char** argv) {
 
     const char* app_name = "MimiPS1 - Recompiled Native macOS";
 
-    // Auto-detect resources from App Bundle
+    // Auto-detect resources from App Bundle and User directories
     @autoreleasepool {
         NSBundle* bundle = [NSBundle mainBundle];
         NSString* resPath = [bundle resourcePath];
-        if (resPath) {
-            NSFileManager* fm = [NSFileManager defaultManager];
+        NSFileManager* fm = [NSFileManager defaultManager];
+        NSString* homeDir = NSHomeDirectory();
 
-            // 1. Auto-load initial boot executable (code and data segment)
+        // 1. Auto-discover official BIOS if present
+        NSArray* biosCandidates = @[
+            [homeDir stringByAppendingPathComponent:@"Downloads/SCPH1001.BIN"],
+            [homeDir stringByAppendingPathComponent:@"Downloads/scph1001.bin"],
+            [homeDir stringByAppendingPathComponent:@"Downloads/SCPH-1001.bin"],
+            [homeDir stringByAppendingPathComponent:@"Downloads/SCPH5501.bin"],
+            [homeDir stringByAppendingPathComponent:@".mimips1/bios/SCPH1001.BIN"],
+            [homeDir stringByAppendingPathComponent:@".mimips1/bios/scph1001.bin"],
+            (resPath ? [resPath stringByAppendingPathComponent:@"bios.bin"] : @"")
+        ];
+        for (NSString* cand in biosCandidates) {
+            if (cand.length > 0 && [fm fileExistsAtPath:cand]) {
+                if (ps1_memory_load_bios(ctx, [cand UTF8String])) {
+                    printf("[MimiPS1] Official PS1 BIOS detected & loaded: %s\n", [cand UTF8String]);
+                    break;
+                }
+            }
+        }
+        if (!ctx->memory.has_bios) {
+            printf("[MimiPS1] Using built-in Clean-Room BIOS HLE\n");
+        }
+
+        // 2. Auto-load initial boot executable (code and data segment)
+        if (resPath) {
             NSString* bootExe = [resPath stringByAppendingPathComponent:@"boot.exe"];
             if ([fm fileExistsAtPath:bootExe]) {
                 printf("[MimiPS1] Auto-loading boot executable from bundle: %s\n", [bootExe UTF8String]);
                 ps1_runtime_load_exe(ctx, [bootExe UTF8String]);
             }
 
-            // 2. Auto-mount game disc image (.bin/.iso)
+            // 3. Auto-mount game disc image (.bin/.iso)
             NSArray* entries = [fm contentsOfDirectoryAtPath:resPath error:nil];
             for (NSString* entry in entries) {
+                if ([entry.lowercaseString isEqualToString:@"bios.bin"] || [entry.lowercaseString isEqualToString:@"boot.exe"]) {
+                    continue;
+                }
                 NSString* ext = [entry.pathExtension lowercaseString];
                 if ([ext isEqualToString:@"bin"] || [ext isEqualToString:@"iso"] || [ext isEqualToString:@"img"]) {
                     NSString* full = [resPath stringByAppendingPathComponent:entry];
@@ -54,15 +80,21 @@ int main(int argc, char** argv) {
 
     // Command-line overrides if passed
     if (argc > 1) {
-        const char* file_arg = argv[1];
-        size_t len = strlen(file_arg);
-        if (len > 4 && (strcasecmp(file_arg + len - 4, ".iso") == 0 ||
-                        strcasecmp(file_arg + len - 4, ".bin") == 0)) {
-            ps1_cdrom_open_image(&ctx->cdrom, file_arg);
-        } else {
-            ps1_runtime_load_exe(ctx, file_arg);
+        for (int i = 1; i < argc; i++) {
+            const char* arg = argv[i];
+            size_t len = strlen(arg);
+            if (strcmp(arg, "--bios") == 0 && i + 1 < argc) {
+                ps1_memory_load_bios(ctx, argv[++i]);
+                printf("[MimiPS1] Loaded BIOS from CLI: %s\n", argv[i]);
+            } else if (len > 4 && (strcasecmp(arg + len - 4, ".iso") == 0 ||
+                                   strcasecmp(arg + len - 4, ".bin") == 0)) {
+                ps1_cdrom_open_image(&ctx->cdrom, arg);
+                app_name = arg;
+            } else {
+                ps1_runtime_load_exe(ctx, arg);
+                app_name = arg;
+            }
         }
-        app_name = file_arg;
     }
 
     printf("[MimiPS1] Launching native Apple Silicon Metal window...\n");

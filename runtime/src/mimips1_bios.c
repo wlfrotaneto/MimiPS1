@@ -77,18 +77,25 @@ bool ps1_bios_handle_a0(PS1Context* ctx, uint32_t func) {
     }
 }
 
+void ps1_bios_deliver_event(PS1Context* ctx, uint32_t class_id, uint32_t spec) {
+    for (int i = 0; i < PS1_MAX_EVENTS; i++) {
+        if (ctx->bios.events[i].enabled &&
+            ctx->bios.events[i].class_id == class_id &&
+            (ctx->bios.events[i].spec == spec || ctx->bios.events[i].spec == 0)) {
+            ctx->bios.events[i].triggered = true;
+            if (ctx->bios.events[i].func != 0) {
+                ps1_call_indirect(ctx, ctx->bios.events[i].func);
+            }
+        }
+    }
+}
+
 bool ps1_bios_handle_b0(PS1Context* ctx, uint32_t func) {
     uint32_t* r = ctx->cpu.r;
 
     switch (func) {
         case 0x17: // DeliverEvent(class, spec)
-            for (int i = 0; i < PS1_MAX_EVENTS; i++) {
-                if (ctx->bios.events[i].enabled &&
-                    ctx->bios.events[i].class_id == r[4] &&
-                    ctx->bios.events[i].spec == r[5]) {
-                    ctx->bios.events[i].triggered = true;
-                }
-            }
+            ps1_bios_deliver_event(ctx, r[4], r[5]);
             r[2] = 0;
             return true;
         case 0x18: // OpenEvent(class, spec, mode, func)
@@ -115,6 +122,28 @@ bool ps1_bios_handle_b0(PS1Context* ctx, uint32_t func) {
                 }
             }
             return true;
+        case 0x1A: // WaitEvent(event)
+            {
+                int ev_idx = r[4] & 0x1F;
+                if (ev_idx < PS1_MAX_EVENTS) {
+                    if (ctx->bios.events[ev_idx].triggered) {
+                        ctx->bios.events[ev_idx].triggered = false;
+                        r[2] = 1;
+                    } else {
+                        // Tick CD-ROM to advance pending operations
+                        ps1_cdrom_tick(ctx, 10000);
+                        if (ctx->bios.events[ev_idx].triggered) {
+                            ctx->bios.events[ev_idx].triggered = false;
+                            r[2] = 1;
+                        } else {
+                            r[2] = 0;
+                        }
+                    }
+                } else {
+                    r[2] = 0;
+                }
+            }
+            return true;
         case 0x1B: // TestEvent(event)
             {
                 int ev_idx = r[4] & 0x1F;
@@ -134,6 +163,24 @@ bool ps1_bios_handle_b0(PS1Context* ctx, uint32_t func) {
                     r[2] = 1;
                 }
             }
+            return true;
+        case 0x1D: // DisableEvent(event)
+            {
+                int ev_idx = r[4] & 0x1F;
+                if (ev_idx < PS1_MAX_EVENTS) {
+                    ctx->bios.events[ev_idx].enabled = false;
+                    r[2] = 1;
+                }
+            }
+            return true;
+        case 0x20: // UnDeliverEvent(class, spec)
+            for (int i = 0; i < PS1_MAX_EVENTS; i++) {
+                if (ctx->bios.events[i].class_id == r[4] &&
+                    (ctx->bios.events[i].spec == r[5] || r[5] == 0)) {
+                    ctx->bios.events[i].triggered = false;
+                }
+            }
+            r[2] = 0;
             return true;
         case 0x3F: // InitHeap(addr, size)
             ctx->bios.heap_base = r[4];

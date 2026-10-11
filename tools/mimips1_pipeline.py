@@ -185,13 +185,14 @@ def compile_native_app(recompiled_dir, app_name):
     run_command(cmd)
     return output_bin
 
-def package_bundle_and_dmg(bin_path, app_name, disc_path=None, boot_exe=None):
+def package_bundle_and_dmg(bin_path, app_name, disc_path=None, boot_exe=None, bios_path=None):
     # 1. Create .app
     print(f"📦 {BOLD}Building macOS app bundle: {app_name}.app...{RESET}")
     app_script = os.path.join(ROOT_DIR, "tools", "build_app_bundle.sh")
     disc_arg = f'"{disc_path}"' if disc_path and os.path.isfile(disc_path) else '""'
     boot_arg = f'"{boot_exe}"' if boot_exe and os.path.isfile(boot_exe) else '""'
-    run_command(f"chmod +x \"{app_script}\" && \"{app_script}\" \"{bin_path}\" \"{app_name}\" \"{BUILD_DIR}\" {disc_arg} {boot_arg}", silent=True)
+    bios_arg = f'"{bios_path}"' if bios_path and os.path.isfile(bios_path) else '""'
+    run_command(f"chmod +x \"{app_script}\" && \"{app_script}\" \"{bin_path}\" \"{app_name}\" \"{BUILD_DIR}\" {disc_arg} {boot_arg} {bios_arg}", silent=True)
 
     # 2. Create .dmg
     print(f"💿 {BOLD}Packaging DMG installer with UDZO compression...{RESET}")
@@ -210,6 +211,7 @@ def main():
     recomp_p.add_argument("--name", default="PS1RecompiledGame", help="macOS application name")
     recomp_p.add_argument("--output", default=os.path.join(BUILD_DIR, "recompiled"), help="Output directory for generated C source")
     recomp_p.add_argument("--embed-disc", action="store_true", help="Embed CD disc image (.bin/.iso) into final app bundle")
+    recomp_p.add_argument("--bios", default=None, help="Path to official PS1 BIOS image (e.g. SCPH1001.BIN)")
 
     args = parser.parse_args()
     if args.command == "pipeline":
@@ -222,8 +224,15 @@ def main():
         is_disc = os.path.isfile(args.exe) and os.path.splitext(args.exe)[1].lower() in ['.bin', '.iso', '.img']
         disc_to_embed = args.exe if (is_disc and args.embed_disc) else None
 
+        bios_path = args.bios
+        if not bios_path:
+            candidate = os.path.expanduser("~/Downloads/SCPH1001.BIN")
+            if os.path.isfile(candidate):
+                bios_path = candidate
+                print(f"🔍 {CYAN}Auto-detected user BIOS in Downloads:{RESET} {bios_path}")
+
         print(f"\n▶️  {BOLD}[Step 3/3] Packaging App Bundle and DMG Installer...{RESET}")
-        package_bundle_and_dmg(bin_path, args.name, disc_path=disc_to_embed, boot_exe=boot_exe)
+        package_bundle_and_dmg(bin_path, args.name, disc_path=disc_to_embed, boot_exe=boot_exe, bios_path=bios_path)
 
         dmg_file = os.path.join(DIST_DIR, f"{args.name}-AppleSilicon.dmg")
         app_file = os.path.join(BUILD_DIR, f"{args.name}.app")
