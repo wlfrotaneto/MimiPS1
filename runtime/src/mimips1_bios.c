@@ -320,6 +320,7 @@ bool ps1_bios_handle_b0(PS1Context* ctx, uint32_t func) {
                     while (!ctx->bios.events[ev_idx].triggered && attempts++ < 2000) {
                         ps1_cdrom_tick(ctx, 50000);
                         ps1_timers_tick(ctx, 50000);
+                        ps1_trigger_irq(ctx, IRQ_VBLANK);
                     }
                     ctx->bios.events[ev_idx].triggered = false;
                     r[2] = 1;

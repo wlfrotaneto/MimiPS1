@@ -420,6 +420,25 @@ static void execute_gp0_packet(PS1GPU* gpu) {
         return;
     }
 
+    // VRAM to VRAM Copy (Move Image)
+    if (op >= 0x80 && op <= 0x9F) {
+        uint16_t sx = (uint16_t)(gpu->gp0_fifo[1] & 0x3FF);
+        uint16_t sy = (uint16_t)((gpu->gp0_fifo[1] >> 16) & 0x1FF);
+        uint16_t dx = (uint16_t)(gpu->gp0_fifo[2] & 0x3FF);
+        uint16_t dy = (uint16_t)((gpu->gp0_fifo[2] >> 16) & 0x1FF);
+        uint16_t w  = (uint16_t)(gpu->gp0_fifo[3] & 0xFFFF);
+        uint16_t h  = (uint16_t)(gpu->gp0_fifo[3] >> 16);
+        if (w == 0) w = 1024;
+        if (h == 0) h = 512;
+        for (uint16_t y = 0; y < h; y++) {
+            for (uint16_t x = 0; x < w; x++) {
+                gpu->vram[(dy + y) % PS1_VRAM_HEIGHT][(dx + x) % PS1_VRAM_WIDTH] =
+                    gpu->vram[(sy + y) % PS1_VRAM_HEIGHT][(sx + x) % PS1_VRAM_WIDTH];
+            }
+        }
+        return;
+    }
+
     // CPU to VRAM
     if (op >= 0xA0 && op <= 0xBF) {
         gpu->transfer.x = (uint16_t)(gpu->gp0_fifo[1] & 0x3FF);
@@ -442,6 +461,11 @@ static void execute_gp0_packet(PS1GPU* gpu) {
         gpu->tex_color_mode = (uint8_t)((val >> 7) & 0x03);
         gpu->dither_enable = (val & (1 << 9)) != 0;
         gpu->tex_disable = (val & (1 << 11)) != 0;
+        return;
+    }
+
+    // Texture Window Setting
+    if (op == 0xE2) {
         return;
     }
 
@@ -470,6 +494,13 @@ static void execute_gp0_packet(PS1GPU* gpu) {
         if (oy & 0x400) oy |= 0xF800;
         gpu->draw_offset_x = ox;
         gpu->draw_offset_y = oy;
+        return;
+    }
+
+    // Mask Bit Setting
+    if (op == 0xE6) {
+        uint32_t val = gpu->gp0_fifo[0];
+        gpu->status = (gpu->status & ~(3 << 11)) | ((val & 3) << 11);
         return;
     }
 }
@@ -519,12 +550,29 @@ void ps1_gpu_write_gp1(PS1GPU* gpu, uint32_t val) {
         case 0x01: // Reset FIFO
             gpu->gp0_fifo_len = 0;
             break;
-        case 0x03: // Display Enable
+        case 0x02: // Acknowledge GPU Interrupt
+            gpu->status &= ~GPUSTAT_INTERRUPT_REQ;
+            break;
+        case 0x03: // Display Enable (val & 1: 1=Disable/blank, 0=Enable)
+            if (val & 1) gpu->status |= GPUSTAT_DISPLAY_ENABLE;
+            else gpu->status &= ~GPUSTAT_DISPLAY_ENABLE;
             gpu->disp_enable = (val & 1) == 0;
+            break;
+        case 0x04: // DMA Direction / Data Request
+            gpu->status = (gpu->status & ~GPUSTAT_DMA_DIR) | ((val & 3) << 29);
+            if ((val & 3) != 0) {
+                gpu->status |= GPUSTAT_DMA_DATA_REQ;
+            } else {
+                gpu->status &= ~GPUSTAT_DMA_DATA_REQ;
+            }
             break;
         case 0x05: // Display Start
             gpu->disp_x = (int16_t)(val & 0x3FF);
             gpu->disp_y = (int16_t)((val >> 10) & 0x1FF);
+            break;
+        case 0x06: // Horizontal Display Range
+            break;
+        case 0x07: // Vertical Display Range
             break;
         case 0x08: // Display Mode
             {
@@ -538,7 +586,12 @@ void ps1_gpu_write_gp1(PS1GPU* gpu, uint32_t val) {
                 gpu->disp_h = (val & (1 << 2)) ? 480 : 240;
                 gpu->is_pal = (val & (1 << 3)) != 0;
                 gpu->is_24bit = (val & (1 << 4)) != 0;
+
+                // Update GPUSTAT bits 16..22
+                gpu->status = (gpu->status & ~(0x7F << 16)) | ((val & 0x7F) << 16);
             }
+            break;
+        case 0x10: // Get GPU Info
             break;
     }
 }

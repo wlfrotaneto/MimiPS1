@@ -102,6 +102,12 @@ void ps1_trigger_irq(PS1Context* ctx, uint32_t irq_bit) {
     // Deliver corresponding BIOS events to waiting game loops and callbacks
     if (irq_bit & IRQ_VBLANK) {
         ps1_bios_deliver_event(ctx, 0xF0000001, 0x0001); // V-Blank event
+        ps1_bios_deliver_event(ctx, 0xF0000001, 0x0004);
+        ps1_bios_deliver_event(ctx, 0xF2000001, 0x0001);
+        ps1_bios_deliver_event(ctx, 0xF2000001, 0x0004);
+        ps1_bios_deliver_event(ctx, 0xF4000001, 0x0001);
+        ps1_bios_deliver_event(ctx, 0xF0000002, 0x0001); // RCnt 1 (H-Blank / V-Sync)
+        ps1_bios_deliver_event(ctx, 0xF2000002, 0x0001);
     }
     if (irq_bit & IRQ_CDROM) {
         ps1_bios_deliver_event(ctx, 0xF0000003, 0x0020); // CD Complete event
