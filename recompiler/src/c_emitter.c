@@ -238,7 +238,6 @@ bool mips_emit_c_code(const MipsProgram* prog, const EmitterOptions* opts) {
     while (fn) {
         fprintf(fc, "void %s(PS1Context* ctx) {\n", fn->name);
         fprintf(fc, "    bool _take_branch = false;\n");
-        fprintf(fc, "    if (__builtin_expect(ctx->cpu.pc != 0x%08X, 0)) goto dispatch_entry;\n", fn->entry_pc);
 
         MipsBlock* blk = fn->first_block;
         while (blk) {
@@ -369,11 +368,7 @@ bool mips_emit_c_code(const MipsProgram* prog, const EmitterOptions* opts) {
     fprintf(fc, "void ps1_init_recompiled_game(PS1Context* ctx) {\n");
     fn = prog->first_func;
     while (fn) {
-        MipsBlock* b = fn->first_block;
-        while (b) {
-            fprintf(fc, "    ps1_register_function(ctx, 0x%08X, %s);\n", b->start_pc, fn->name);
-            b = b->next;
-        }
+        fprintf(fc, "    ps1_register_function(ctx, 0x%08X, %s);\n", fn->entry_pc, fn->name);
         fn = fn->next;
     }
     fprintf(fc, "    if (ctx->cpu.pc == 0) {\n");
