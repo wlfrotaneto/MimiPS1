@@ -9,6 +9,8 @@ void ps1_spu_init(PS1SPU* spu) {
     memset(spu, 0, sizeof(PS1SPU));
     spu->master_vol_left = 0x3FFF;
     spu->master_vol_right = 0x3FFF;
+    spu->cd_vol_left = 0x7FFF;
+    spu->cd_vol_right = 0x7FFF;
 }
 
 void ps1_spu_reset(PS1SPU* spu) {
@@ -35,10 +37,26 @@ uint16_t ps1_spu_read(PS1SPU* spu, uint32_t addr) {
         return (uint16_t)spu->master_vol_left;
     } else if (offset == 0x182) {
         return (uint16_t)spu->master_vol_right;
+    } else if (offset == 0x19C) {
+        uint16_t s = 0;
+        for (int i = 0; i < 16; i++) {
+            if (spu->voices[i].active && spu->voices[i].adsr_phase != ADSR_PHASE_OFF) s |= (1 << i);
+        }
+        return s;
+    } else if (offset == 0x19E) {
+        uint16_t s = 0;
+        for (int i = 0; i < 8; i++) {
+            if (spu->voices[16 + i].active && spu->voices[16 + i].adsr_phase != ADSR_PHASE_OFF) s |= (1 << i);
+        }
+        return s;
     } else if (offset == 0x1AA) {
         return spu->ctrl;
     } else if (offset == 0x1AE) {
         return spu->stat;
+    } else if (offset == 0x1B0) {
+        return (uint16_t)spu->cd_vol_left;
+    } else if (offset == 0x1B2) {
+        return (uint16_t)spu->cd_vol_right;
     }
     return 0;
 }
@@ -111,6 +129,10 @@ void ps1_spu_write(PS1SPU* spu, uint32_t addr, uint16_t val) {
     } else if (offset == 0x1AA) {
         spu->ctrl = val;
         spu->stat = (val & 0x003F);
+    } else if (offset == 0x1B0) {
+        spu->cd_vol_left = (int16_t)val;
+    } else if (offset == 0x1B2) {
+        spu->cd_vol_right = (int16_t)val;
     }
 }
 

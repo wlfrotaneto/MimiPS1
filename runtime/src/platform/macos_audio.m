@@ -18,9 +18,37 @@ static void audio_callback(void* userData, AudioQueueRef inAQ, AudioQueueBufferR
     if (!state || !state->context) return;
 
     int samples = inBuffer->mAudioDataBytesCapacity / (2 * sizeof(int16_t));
-    ps1_spu_generate_samples(&state->context->spu, (int16_t*)inBuffer->mAudioData, samples);
-    inBuffer->mAudioDataByteSize = inBuffer->mAudioDataBytesCapacity;
+    int16_t* dst = (int16_t*)inBuffer->mAudioData;
 
+    // 1. Generate synthesized SPU voice audio
+    ps1_spu_generate_samples(&state->context->spu, dst, samples);
+
+    // 2. Mix CD-DA digital audio track if CD-ROM is playing
+    if (state->context->cdrom.playing && state->context->cdrom.image_file) {
+        int16_t cdda_buf[AUDIO_BUFFER_SIZE * 2];
+        int to_read = samples < AUDIO_BUFFER_SIZE ? samples : AUDIO_BUFFER_SIZE;
+        int got = ps1_cdrom_read_cdda_samples(&state->context->cdrom, cdda_buf, to_read);
+
+        int cd_vol_l = state->context->spu.cd_vol_left;
+        int cd_vol_r = state->context->spu.cd_vol_right;
+        if (cd_vol_l == 0 && cd_vol_r == 0) {
+            cd_vol_l = 0x7FFF;
+            cd_vol_r = 0x7FFF;
+        }
+
+        for (int i = 0; i < got; i++) {
+            int32_t cl = (cdda_buf[i * 2 + 0] * cd_vol_l) >> 15;
+            int32_t cr = (cdda_buf[i * 2 + 1] * cd_vol_r) >> 15;
+            int32_t out_l = dst[i * 2 + 0] + cl;
+            int32_t out_r = dst[i * 2 + 1] + cr;
+            if (out_l > 32767) out_l = 32767; else if (out_l < -32768) out_l = -32768;
+            if (out_r > 32767) out_r = 32767; else if (out_r < -32768) out_r = -32768;
+            dst[i * 2 + 0] = (int16_t)out_l;
+            dst[i * 2 + 1] = (int16_t)out_r;
+        }
+    }
+
+    inBuffer->mAudioDataByteSize = inBuffer->mAudioDataBytesCapacity;
     AudioQueueEnqueueBuffer(inAQ, inBuffer, 0, NULL);
 }
 

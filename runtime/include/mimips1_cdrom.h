@@ -52,6 +52,9 @@ struct PS1CDROM {
     uint32_t current_lba;
     bool     reading;
     bool     seeking;
+    bool     playing;
+    bool     muted;
+    uint32_t cdda_sample_offset;
 
     uint8_t  irq_flag;
     uint8_t  irq_enable;
@@ -61,6 +64,7 @@ void     ps1_cdrom_init(PS1CDROM* cdrom);
 void     ps1_cdrom_reset(PS1CDROM* cdrom);
 bool     ps1_cdrom_open_image(PS1CDROM* cdrom, const char* path);
 void     ps1_cdrom_close_image(PS1CDROM* cdrom);
+int      ps1_cdrom_read_cdda_samples(PS1CDROM* cdrom, int16_t* buffer_stereo, int num_samples);
 
 // ISO9660 filesystem functions
 typedef struct {

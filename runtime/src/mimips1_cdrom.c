@@ -85,6 +85,15 @@ static void handle_cdrom_command(PS1Context* ctx, uint8_t cmd) {
             push_response(cd, cd->status);
             cd->irq_flag = 3;
             break;
+        case 0x03: // Play
+            cd->reading = false;
+            cd->playing = true;
+            cd->status |= CD_STAT_PLAY_BIT;
+            cd->status &= ~CD_STAT_READ_BIT;
+            cd->cdda_sample_offset = 0;
+            push_response(cd, cd->status);
+            cd->irq_flag = 3;
+            break;
         case 0x06: // ReadN
         case 0x1B: // ReadS
             cd->status |= CD_STAT_READ_BIT;
@@ -92,15 +101,34 @@ static void handle_cdrom_command(PS1Context* ctx, uint8_t cmd) {
             push_response(cd, cd->status);
             cd->irq_flag = 3;
             break;
+        case 0x08: // Stop
+            cd->playing = false;
+            cd->reading = false;
+            cd->status &= ~(CD_STAT_READ_BIT | CD_STAT_PLAY_BIT);
+            push_response(cd, cd->status);
+            cd->irq_flag = 3;
+            break;
         case 0x09: // Pause
             cd->reading = false;
-            cd->status &= ~CD_STAT_READ_BIT;
+            cd->playing = false;
+            cd->status &= ~(CD_STAT_READ_BIT | CD_STAT_PLAY_BIT);
             push_response(cd, cd->status);
             cd->irq_flag = 3;
             break;
         case 0x0A: // Init
             cd->reading = false;
+            cd->playing = false;
             cd->status = CD_STAT_SPINDLE_ON;
+            push_response(cd, cd->status);
+            cd->irq_flag = 3;
+            break;
+        case 0x0B: // Mute
+            cd->muted = true;
+            push_response(cd, cd->status);
+            cd->irq_flag = 3;
+            break;
+        case 0x0C: // Demute
+            cd->muted = false;
             push_response(cd, cd->status);
             cd->irq_flag = 3;
             break;
@@ -321,4 +349,47 @@ bool ps1_cdrom_read_bytes(PS1CDROM* cdrom, uint32_t lba, uint32_t offset_in_file
     }
 
     return true;
+}
+
+int ps1_cdrom_read_cdda_samples(PS1CDROM* cdrom, int16_t* buffer_stereo, int num_samples) {
+    if (!cdrom || !cdrom->image_file || !cdrom->playing || num_samples <= 0) {
+        return 0;
+    }
+
+    if (cdrom->muted) {
+        memset(buffer_stereo, 0, num_samples * 2 * sizeof(int16_t));
+        return num_samples;
+    }
+
+    int samples_read = 0;
+    while (samples_read < num_samples) {
+        int samples_in_sector = 588; // 2352 bytes / 4 bytes per stereo sample
+        int remaining_in_sector = samples_in_sector - (int)cdrom->cdda_sample_offset;
+        int needed = num_samples - samples_read;
+        int to_copy = needed < remaining_in_sector ? needed : remaining_in_sector;
+
+        long sector_byte_offset = (long)cdrom->current_lba * cdrom->sector_size;
+        long sample_offset = sector_byte_offset + ((long)cdrom->cdda_sample_offset * 4);
+
+        if (fseek(cdrom->image_file, sample_offset, SEEK_SET) != 0) break;
+        size_t r = fread(&buffer_stereo[samples_read * 2], sizeof(int16_t) * 2, to_copy, cdrom->image_file);
+        if (r == 0) {
+            cdrom->playing = false;
+            cdrom->status &= ~CD_STAT_PLAY_BIT;
+            break;
+        }
+
+        samples_read += (int)r;
+        cdrom->cdda_sample_offset += (uint32_t)r;
+        if (cdrom->cdda_sample_offset >= 588) {
+            cdrom->cdda_sample_offset = 0;
+            cdrom->current_lba++;
+            if (cdrom->total_sectors > 0 && cdrom->current_lba >= cdrom->total_sectors) {
+                cdrom->playing = false;
+                cdrom->status &= ~CD_STAT_PLAY_BIT;
+                break;
+            }
+        }
+    }
+    return samples_read;
 }
