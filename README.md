@@ -170,21 +170,34 @@ open build/TriangleDemo.app
 
 ---
 
-## Technical Roadmap
+## Current Project Status
 
-- [x] MIPS-I R3000A instruction decoding & basic block partitioning
-- [x] Function recovery and recursive call-graph traversal
-- [x] Branch delay slot resolution & backward loop slice budgeting
-- [x] Metal hardware-accelerated rasterization & VRAM display pipeline
-- [x] CoreAudio SPU streaming engine
-- [x] High-Level Emulation (HLE) for fundamental BIOS vectors (`A0`/`B0`/`C0`)
-- [x] Dual-format disc sector parser (2048-byte ISO and 2352-byte RAW Mode 2 Form 1)
-- [x] macOS `.app` bundle builder & compressed UDZO `.dmg` packaging
-- [ ] Cycle-accurate CD-ROM controller IRQ state machine (INT1/INT2/INT3 timing for commercial SDK sync loops)
-- [ ] ADPCM voice ADSR envelope curves & hardware reverberation buffers
-- [ ] Configurable Metal post-processing shaders (CRT scanlines, integer scaling, bilinear filtering)
+> [!NOTE]
+> **MimiPS1 is currently in active research & development.**
+
+* **Homebrew & Technical Demos:** Fully functional. Standalone executables such as `TriangleDemo.EXE` recompile cleanly, render in real-time via Metal at 60 FPS, process input, and package into standalone macOS applications.
+* **AOT Static Recompiler:** Functional and robust. Converts MIPS R3000A machine code into clean, optimizable C99, resolves branch delay slots, reconstructs Control Flow Graphs (CFGs), and supports Psy-Q function prologue detection.
+* **Commercial Game Support (WIP / Experimental):** Under active development. Commercial titles utilizing the Psy-Q SDK (such as *Cotton Original* and *Crash Bandicoot*) successfully disassemble, link against the native runtime, boot, and enter their main game loops. However, they are currently subject to synchronization stalls prior to their first display frame swap due to hardware interrupt timing.
+* **Current Focus:** Unifying CPU execution, timers, CD-ROM status events, and hardware IRQs into a single-threaded cycle-synchronized loop (eliminating host-thread race conditions between the Metal presentation layer and the recompiled game loop).
 
 ---
+
+## Technical Roadmap
+
+### Architecture & Synchronization (Active)
+- [x] MIPS-I R3000A instruction decoding & basic block partitioning
+- [x] Function recovery, delay slot resolution, and CFG analysis
+- [x] Metal hardware-accelerated rasterization & 1024×512 VRAM pipeline
+- [x] CoreAudio SPU streaming engine
+- [x] BIOS HLE support for kernel vector tables (`A0`, `B0` Rev 1/2, `C0`)
+- [x] Dual-format disc sector parser (2048-byte ISO & 2352-byte RAW Mode 2 Form 1)
+- [x] macOS `.app` bundle builder & compressed UDZO `.dmg` packaging
+- [ ] **Single-threaded cycle-budgeted event scheduler:** Move IRQ delivery and timer ticks out of the Metal rendering thread into synchronous execution points within the CPU thread to ensure deterministic Psy-Q driver operation.
+- [ ] Full CD-ROM controller state machine timing (CdlReadN/CdlSeekL sub-response delays)
+- [ ] ADPCM voice ADSR envelope curves & hardware reverberation buffers
+
+### Future Multiplatform Vision
+- [ ] **Windows (x86_64) Platform Backend:** Leverage MimiPS1's pure C11 core with a modular SDL2/SDL3 platform layer (replacing Cocoa/Metal/CoreAudio with DirectX/Vulkan/OpenGL and miniaudio).
 
 ## License
 
