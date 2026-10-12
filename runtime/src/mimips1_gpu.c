@@ -16,6 +16,12 @@ static inline void ps1_color_to_rgb(uint16_t c, uint8_t* r, uint8_t* g, uint8_t*
     *b = (uint8_t)(((c >> 10) & 0x1F) << 3);
 }
 
+static inline int16_t gp0_coord(uint32_t val) {
+    int16_t c = (int16_t)(val & 0x7FF);
+    if (c & 0x400) c |= 0xF800; // Sign-extend 11-bit to 16-bit (-1024..+1023)
+    return c;
+}
+
 void ps1_gpu_init(PS1GPU* gpu) {
     memset(gpu, 0, sizeof(PS1GPU));
     gpu->status = GPUSTAT_READY_FOR_CMD | GPUSTAT_READY_FOR_DMA | GPUSTAT_READY_FOR_VRAM;
@@ -324,8 +330,8 @@ static void execute_gp0_packet(PS1GPU* gpu) {
 
             v[i].r = cr; v[i].g = cg; v[i].b = cb;
             uint32_t pos = gpu->gp0_fifo[idx++];
-            v[i].x = (int16_t)(pos & 0xFFFF) + gpu->draw_offset_x;
-            v[i].y = (int16_t)(pos >> 16) + gpu->draw_offset_y;
+            v[i].x = gp0_coord(pos & 0xFFFF) + gpu->draw_offset_x;
+            v[i].y = gp0_coord(pos >> 16) + gpu->draw_offset_y;
 
             if (is_textured) {
                 uint32_t uv = gpu->gp0_fifo[idx++];
@@ -350,6 +356,36 @@ static void execute_gp0_packet(PS1GPU* gpu) {
         return;
     }
 
+    // Lines
+    if (op >= 0x40 && op <= 0x5F) {
+        bool is_gouraud = (op & (1 << 4)) != 0;
+        bool semi_trans = (op & (1 << 1)) != 0;
+        PS1Vertex v0, v1;
+        memset(&v0, 0, sizeof(v0));
+        memset(&v1, 0, sizeof(v1));
+        uint8_t cr = (uint8_t)(gpu->gp0_fifo[0] & 0xFF);
+        uint8_t cg = (uint8_t)((gpu->gp0_fifo[0] >> 8) & 0xFF);
+        uint8_t cb = (uint8_t)((gpu->gp0_fifo[0] >> 16) & 0xFF);
+        v0.r = cr; v0.g = cg; v0.b = cb;
+        uint32_t pos0 = gpu->gp0_fifo[1];
+        v0.x = gp0_coord(pos0 & 0xFFFF);
+        v0.y = gp0_coord(pos0 >> 16);
+        int idx = 2;
+        if (is_gouraud) {
+            uint32_t c1 = gpu->gp0_fifo[idx++];
+            v1.r = (uint8_t)(c1 & 0xFF);
+            v1.g = (uint8_t)((c1 >> 8) & 0xFF);
+            v1.b = (uint8_t)((c1 >> 16) & 0xFF);
+        } else {
+            v1.r = cr; v1.g = cg; v1.b = cb;
+        }
+        uint32_t pos1 = gpu->gp0_fifo[idx++];
+        v1.x = gp0_coord(pos1 & 0xFFFF);
+        v1.y = gp0_coord(pos1 >> 16);
+        ps1_gpu_draw_line(gpu, &v0, &v1, is_gouraud, semi_trans);
+        return;
+    }
+
     // Rectangles / Sprites
     if (op >= 0x60 && op <= 0x7F) {
         bool is_textured = (op & (1 << 2)) != 0;
@@ -358,8 +394,8 @@ static void execute_gp0_packet(PS1GPU* gpu) {
         uint8_t g = (uint8_t)((gpu->gp0_fifo[0] >> 8) & 0xFF);
         uint8_t b = (uint8_t)((gpu->gp0_fifo[0] >> 16) & 0xFF);
 
-        int16_t x = (int16_t)(gpu->gp0_fifo[1] & 0xFFFF);
-        int16_t y = (int16_t)(gpu->gp0_fifo[1] >> 16);
+        int16_t x = gp0_coord(gpu->gp0_fifo[1] & 0xFFFF);
+        int16_t y = gp0_coord(gpu->gp0_fifo[1] >> 16);
         uint8_t u = 0, v = 0;
         int idx = 2;
         if (is_textured) {

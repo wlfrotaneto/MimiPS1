@@ -179,7 +179,7 @@ def compile_native_app(recompiled_dir, app_name):
 
     sources_str = " ".join([f'"{s}"' for s in runtime_sources])
     frameworks = "-framework Cocoa -framework Metal -framework MetalKit -framework AudioToolbox -framework GameController"
-    cflags = f"-O3 -flto -arch arm64 -I\"{runtime_inc}\" -I\"{recompiled_dir}\" -Wall -Wno-unused-variable -Wno-unused-label -Wno-parentheses"
+    cflags = f"-O2 -arch arm64 -I\"{runtime_inc}\" -I\"{recompiled_dir}\" -Wall -Wno-unused-variable -Wno-unused-label -Wno-parentheses"
 
     cmd = f"clang {cflags} {sources_str} {frameworks} -o \"{output_bin}\""
     run_command(cmd)

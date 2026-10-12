@@ -238,6 +238,7 @@ bool mips_emit_c_code(const MipsProgram* prog, const EmitterOptions* opts) {
     while (fn) {
         fprintf(fc, "void %s(PS1Context* ctx) {\n", fn->name);
         fprintf(fc, "    bool _take_branch = false;\n");
+        fprintf(fc, "    if (__builtin_expect(ctx->cpu.pc != 0x%08X, 0)) goto dispatch_entry;\n", fn->entry_pc);
 
         MipsBlock* blk = fn->first_block;
         while (blk) {
@@ -336,19 +337,30 @@ bool mips_emit_c_code(const MipsProgram* prog, const EmitterOptions* opts) {
                         fprintf(fc, "    CALL_INDIRECT(0x%08X);\n    return;\n", br->target);
                     }
                 }
-                // Indirect Jump (JR $reg)
+                // Indirect Jump (JR $reg, e.g. switch jump tables)
                 else if (br->id == MIPS_OP_JR) {
                     fprintf(fc, "loc_%08x:\n", ds->pc);
                     emit_instruction_c(fc, ds);
-                    fprintf(fc, "    CALL_INDIRECT(R(%u));\n", br->rs);
-                    fprintf(fc, "    return;\n");
+                    fprintf(fc, "    ctx->cpu.pc = R(%u);\n", br->rs);
+                    fprintf(fc, "    goto dispatch_entry;\n");
                 }
             }
 
             blk = blk->next;
         }
 
-        fprintf(fc, "    (void)0;\n");
+        fprintf(fc, "    return;\n");
+        fprintf(fc, "dispatch_entry:\n");
+        fprintf(fc, "    switch (ctx->cpu.pc) {\n");
+        MipsBlock* b = fn->first_block;
+        while (b) {
+            for (int k = 0; k < b->num_insns; k++) {
+                fprintf(fc, "        case 0x%08X: goto loc_%08x;\n", b->insns[k].pc, b->insns[k].pc);
+            }
+            b = b->next;
+        }
+        fprintf(fc, "        default: CALL_INDIRECT(ctx->cpu.pc); return;\n");
+        fprintf(fc, "    }\n");
         fprintf(fc, "}\n\n");
         fn = fn->next;
     }
@@ -357,7 +369,11 @@ bool mips_emit_c_code(const MipsProgram* prog, const EmitterOptions* opts) {
     fprintf(fc, "void ps1_init_recompiled_game(PS1Context* ctx) {\n");
     fn = prog->first_func;
     while (fn) {
-        fprintf(fc, "    ps1_register_function(ctx, 0x%08X, %s);\n", fn->entry_pc, fn->name);
+        MipsBlock* b = fn->first_block;
+        while (b) {
+            fprintf(fc, "    ps1_register_function(ctx, 0x%08X, %s);\n", b->start_pc, fn->name);
+            b = b->next;
+        }
         fn = fn->next;
     }
     fprintf(fc, "    if (ctx->cpu.pc == 0) {\n");

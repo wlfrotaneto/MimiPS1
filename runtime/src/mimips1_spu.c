@@ -110,6 +110,7 @@ void ps1_spu_write(PS1SPU* spu, uint32_t addr, uint16_t val) {
         }
     } else if (offset == 0x1AA) {
         spu->ctrl = val;
+        spu->stat = (val & 0x003F);
     }
 }
 

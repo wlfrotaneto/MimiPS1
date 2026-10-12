@@ -117,6 +117,24 @@ void ps1_dma_execute(PS1Context* ctx, int channel_idx) {
             addr += 4;
         }
     }
+    // SPU DMA Channel (4)
+    else if (channel_idx == DMA_SPU) {
+        uint32_t count = (ch->bcr & 0xFFFF) * (ch->bcr >> 16 ? (ch->bcr >> 16) : 1);
+        uint32_t addr = ch->madr & 0x1FFFFC;
+        bool to_spu = (ch->chcr & 1) != 0;
+        for (uint32_t i = 0; i < count && addr < (PS1_RAM_SIZE - 3); i++) {
+            if (to_spu) {
+                uint16_t w0 = *(uint16_t*)&ctx->memory.ram[addr];
+                uint16_t w1 = *(uint16_t*)&ctx->memory.ram[addr + 2];
+                if (ctx->spu.transfer_addr < (PS1_SPU_RAM_SIZE - 3)) {
+                    *(uint16_t*)&ctx->spu.ram[ctx->spu.transfer_addr] = w0;
+                    *(uint16_t*)&ctx->spu.ram[ctx->spu.transfer_addr + 2] = w1;
+                    ctx->spu.transfer_addr = (ctx->spu.transfer_addr + 4) & 0x7FFFF;
+                }
+            }
+            addr += 4;
+        }
+    }
 
     // Finish DMA
     ch->chcr &= ~(1 << 24); // Clear busy flag
