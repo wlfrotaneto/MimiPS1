@@ -142,6 +142,15 @@ int run_native_macos_app(PS1Context* ctx, const char* window_title) {
         // Init CoreAudio
         macos_audio_init(ctx);
 
+        // Start CPU Game Execution on dedicated background thread
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
+            printf("[MimiPS1] Starting native game execution thread (PC: 0x%08X)...\n", ctx->cpu.pc);
+            if (ctx->cpu.pc != 0) {
+                ps1_call_indirect(ctx, ctx->cpu.pc);
+            }
+            printf("[MimiPS1] Native game execution finished.\n");
+        });
+
         [window makeKeyAndOrderFront:nil];
         [NSApp activateIgnoringOtherApps:YES];
         [NSApp run];

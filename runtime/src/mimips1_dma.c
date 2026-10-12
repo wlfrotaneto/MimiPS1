@@ -57,7 +57,8 @@ void ps1_dma_execute(PS1Context* ctx, int channel_idx) {
         if (sync_mode == 2) {
             // Linked List Mode (Ordering Tables)
             uint32_t cur_addr = ch->madr & 0x1FFFFC;
-            while (cur_addr != 0x00FFFFFF && cur_addr < (PS1_RAM_SIZE - 4)) {
+            int max_packets = 65536;
+            while (cur_addr < (PS1_RAM_SIZE - 4) && --max_packets > 0) {
                 uint32_t header = *(uint32_t*)&ctx->memory.ram[cur_addr];
                 uint32_t packet_words = (header >> 24) & 0xFF;
                 uint32_t next_addr = header & 0x00FFFFFF;
@@ -69,6 +70,7 @@ void ps1_dma_execute(PS1Context* ctx, int channel_idx) {
                         ps1_gpu_write_gp0(&ctx->gpu, word);
                     }
                 }
+                if (next_addr == 0x00FFFFFF || next_addr == 0) break;
                 cur_addr = next_addr & 0x1FFFFC;
             }
         } else {

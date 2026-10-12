@@ -31,16 +31,14 @@ int main(int argc, char** argv) {
         NSFileManager* fm = [NSFileManager defaultManager];
         NSString* homeDir = NSHomeDirectory();
 
-        // 1. Auto-discover official BIOS if present
-        NSArray* biosCandidates = @[
-            [homeDir stringByAppendingPathComponent:@"Downloads/SCPH1001.BIN"],
-            [homeDir stringByAppendingPathComponent:@"Downloads/scph1001.bin"],
-            [homeDir stringByAppendingPathComponent:@"Downloads/SCPH-1001.bin"],
-            [homeDir stringByAppendingPathComponent:@"Downloads/SCPH5501.bin"],
-            [homeDir stringByAppendingPathComponent:@".mimips1/bios/SCPH1001.BIN"],
-            [homeDir stringByAppendingPathComponent:@".mimips1/bios/scph1001.bin"],
-            (resPath ? [resPath stringByAppendingPathComponent:@"bios.bin"] : @"")
-        ];
+        // 1. Auto-discover official BIOS if present (prioritize app bundle)
+        NSMutableArray* biosCandidates = [NSMutableArray array];
+        if (resPath) {
+            [biosCandidates addObject:[resPath stringByAppendingPathComponent:@"bios.bin"]];
+        }
+        [biosCandidates addObject:[homeDir stringByAppendingPathComponent:@".mimips1/bios/SCPH1001.BIN"]];
+        [biosCandidates addObject:[homeDir stringByAppendingPathComponent:@".mimips1/bios/scph1001.bin"]];
+
         for (NSString* cand in biosCandidates) {
             if (cand.length > 0 && [fm fileExistsAtPath:cand]) {
                 if (ps1_memory_load_bios(ctx, [cand UTF8String])) {

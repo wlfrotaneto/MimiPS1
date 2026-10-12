@@ -9,6 +9,15 @@ static bool is_addr_in_text(const PS1Executable* exe, uint32_t addr) {
     return (addr >= exe->text_dest_addr && addr < (exe->text_dest_addr + exe->text_size));
 }
 
+static void add_discovered_entry(uint32_t* entries, int* count, uint32_t addr) {
+    for (int j = 0; j < *count; j++) {
+        if (entries[j] == addr) return;
+    }
+    if (*count < MAX_DISCOVERED_FUNCS) {
+        entries[(*count)++] = addr;
+    }
+}
+
 MipsProgram* mips_analyze_program(const PS1Executable* exe) {
     MipsProgram* prog = (MipsProgram*)calloc(1, sizeof(MipsProgram));
     if (!prog) return NULL;
@@ -22,7 +31,7 @@ MipsProgram* mips_analyze_program(const PS1Executable* exe) {
 
     // Add entry PC
     if (is_addr_in_text(exe, exe->init_pc)) {
-        discovered_entries[entry_count++] = exe->init_pc;
+        add_discovered_entry(discovered_entries, &entry_count, exe->init_pc);
     }
 
     uint32_t num_insns = exe->text_size / 4;
@@ -37,17 +46,12 @@ MipsProgram* mips_analyze_program(const PS1Executable* exe) {
 
         if (insn.is_call && insn.id == MIPS_OP_JAL) {
             if (is_addr_in_text(exe, insn.target)) {
-                bool exists = false;
-                for (int j = 0; j < entry_count; j++) {
-                    if (discovered_entries[j] == insn.target) {
-                        exists = true;
-                        break;
-                    }
-                }
-                if (!exists && entry_count < MAX_DISCOVERED_FUNCS) {
-                    discovered_entries[entry_count++] = insn.target;
-                }
+                add_discovered_entry(discovered_entries, &entry_count, insn.target);
             }
+        }
+        // Standard MIPS stack frame prologue: addiu $sp, $sp, -imm
+        if (insn.id == MIPS_OP_ADDIU && insn.rs == 29 && insn.rt == 29 && insn.simm < 0) {
+            add_discovered_entry(discovered_entries, &entry_count, cur_pc);
         }
     }
 
@@ -124,14 +128,6 @@ MipsProgram* mips_analyze_program(const PS1Executable* exe) {
             last_block = block;
             fn->last_block = block;
             fn->block_count++;
-
-            // If we hit return or unconditional jump, end function
-            if (block_insn_count >= 2) {
-                MipsInsn* last_branch = &block->insns[block_insn_count - 2];
-                if (last_branch->is_return || (last_branch->is_jump && !last_branch->is_call)) {
-                    break;
-                }
-            }
         }
 
         fn->end_pc = cur_pc;
