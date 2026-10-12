@@ -12,6 +12,7 @@
 #include "mimips1_cdrom.h"
 #include "mimips1_bios.h"
 #include "mimips1_input.h"
+#include "mimips1_card.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -31,16 +32,17 @@ extern "C" {
 #define IRQ_PIO         (1 << 10)
 
 struct PS1Context {
-    PS1CPU      cpu;
-    PS1Memory   memory;
-    PS1GPU      gpu;
-    PS1GTE      gte;
-    PS1SPU      spu;
-    PS1DMA      dma;
-    PS1Timers   timers;
-    PS1CDROM    cdrom;
-    PS1BIOS     bios;
-    PS1Input    input;
+    PS1CPU         cpu;
+    PS1Memory      memory;
+    PS1GPU         gpu;
+    PS1GTE         gte;
+    PS1SPU         spu;
+    PS1DMA         dma;
+    PS1Timers      timers;
+    PS1CDROM       cdrom;
+    PS1BIOS        bios;
+    PS1Input       input;
+    PS1CardManager card_mgr;
 
     uint32_t    irq_stat;
     uint32_t    irq_mask;

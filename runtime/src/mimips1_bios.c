@@ -68,7 +68,44 @@ static bool do_cd_search_file(PS1Context* ctx) {
 
 static int bios_file_open(PS1Context* ctx, const char* name, int mode) {
     if (!name) return -1;
-    (void)mode;
+
+    // Check if Memory Card path (bu00: or bu10:)
+    bool is_bu00 = (strncasecmp(name, "bu00:", 5) == 0);
+    bool is_bu10 = (strncasecmp(name, "bu10:", 5) == 0);
+    if (is_bu00 || is_bu10) {
+        int slot = is_bu00 ? 0 : 1;
+        const char* card_file = name + 5;
+        while (*card_file == '/' || *card_file == '\\') card_file++;
+
+        int dir_idx = ps1_card_find_file(&ctx->card_mgr, slot, card_file);
+        if (dir_idx < 0) {
+            // If opening with write/create mode
+            if (mode & 0x0200 || mode == 2 || mode == 0x200) {
+                dir_idx = ps1_card_create_file(&ctx->card_mgr, slot, card_file, 8192);
+            }
+        }
+
+        if (dir_idx >= 0) {
+            for (int i = 0; i < 16; i++) {
+                if (!ctx->bios.files[i].is_open) {
+                    ctx->bios.files[i].is_open = true;
+                    ctx->bios.files[i].is_card = true;
+                    ctx->bios.files[i].card_slot = slot;
+                    ctx->bios.files[i].card_file_idx = dir_idx;
+                    ctx->bios.files[i].file_size = ctx->card_mgr.cards[slot].entries[dir_idx].file_size;
+                    if (ctx->bios.files[i].file_size == 0) ctx->bios.files[i].file_size = 8192;
+                    ctx->bios.files[i].cur_offset = 0;
+                    strncpy(ctx->bios.files[i].name, card_file, sizeof(ctx->bios.files[i].name) - 1);
+                    printf("[BIOS] Memory Card open('%s') -> fd=%d (Slot %d, block %d)\n", name, i, slot, dir_idx + 1);
+                    return i;
+                }
+            }
+        }
+        printf("[BIOS] Memory Card file '%s' NOT FOUND on Slot %d\n", card_file, slot);
+        return -1;
+    }
+
+    // Standard ISO CD-ROM path
     PS1ISOFile iso_file;
     if (!ps1_cdrom_find_file(&ctx->cdrom, name, &iso_file)) {
         printf("[BIOS] open('%s') NOT FOUND on disc\n", name);
@@ -78,6 +115,7 @@ static int bios_file_open(PS1Context* ctx, const char* name, int mode) {
     for (int i = 0; i < 16; i++) {
         if (!ctx->bios.files[i].is_open) {
             ctx->bios.files[i].is_open = true;
+            ctx->bios.files[i].is_card = false;
             ctx->bios.files[i].start_lba = iso_file.lba;
             ctx->bios.files[i].file_size = iso_file.size;
             ctx->bios.files[i].cur_offset = 0;
@@ -93,6 +131,12 @@ static int bios_file_read(PS1Context* ctx, int fd, void* dst, int length) {
     if (fd < 0 || fd >= 16 || !ctx->bios.files[fd].is_open || !dst || length <= 0) return -1;
     PS1OpenFile* f = &ctx->bios.files[fd];
 
+    if (f->is_card) {
+        int r = ps1_card_read_file(&ctx->card_mgr, f->card_slot, f->card_file_idx, f->cur_offset, dst, (uint32_t)length);
+        if (r > 0) f->cur_offset += r;
+        return r;
+    }
+
     uint32_t avail = (f->cur_offset < f->file_size) ? (f->file_size - f->cur_offset) : 0;
     uint32_t to_read = (uint32_t)length < avail ? (uint32_t)length : avail;
     if (to_read == 0) return 0;
@@ -102,6 +146,21 @@ static int bios_file_read(PS1Context* ctx, int fd, void* dst, int length) {
     }
     f->cur_offset += to_read;
     return (int)to_read;
+}
+
+static int bios_file_write(PS1Context* ctx, int fd, const void* src, int length) {
+    if (fd < 0 || fd >= 16 || !ctx->bios.files[fd].is_open || !src || length <= 0) return -1;
+    PS1OpenFile* f = &ctx->bios.files[fd];
+
+    if (f->is_card) {
+        int w = ps1_card_write_file(&ctx->card_mgr, f->card_slot, f->card_file_idx, f->cur_offset, src, (uint32_t)length);
+        if (w > 0) {
+            f->cur_offset += w;
+            if (f->cur_offset > f->file_size) f->file_size = f->cur_offset;
+        }
+        return w;
+    }
+    return 0;
 }
 
 static int bios_file_seek(PS1Context* ctx, int fd, int offset, int seektype) {
@@ -117,7 +176,10 @@ static int bios_file_seek(PS1Context* ctx, int fd, int offset, int seektype) {
 }
 
 static int bios_file_close(PS1Context* ctx, int fd) {
-    if (fd >= 0 && fd < 16) {
+    if (fd >= 0 && fd < 16 && ctx->bios.files[fd].is_open) {
+        if (ctx->bios.files[fd].is_card) {
+            ps1_card_save(&ctx->card_mgr, ctx->bios.files[fd].card_slot);
+        }
         ctx->bios.files[fd].is_open = false;
     }
     return 0;
@@ -143,7 +205,10 @@ bool ps1_bios_handle_a0(PS1Context* ctx, uint32_t func) {
             }
             return true;
         case 0x03: // FileWrite(fd, src, len)
-            r[2] = 0;
+            {
+                const void* src = get_host_ptr(ctx, r[5]);
+                r[2] = (uint32_t)bios_file_write(ctx, r[4], src, (int)r[6]);
+            }
             return true;
         case 0x04: // FileClose(fd)
             r[2] = (uint32_t)bios_file_close(ctx, r[4]);
@@ -383,7 +448,10 @@ bool ps1_bios_handle_b0(PS1Context* ctx, uint32_t func) {
             }
             return true;
         case 0x35: // write(fd, src, len)
-            r[2] = 0;
+            {
+                const void* src = get_host_ptr(ctx, r[5]);
+                r[2] = (uint32_t)bios_file_write(ctx, r[4], src, (int)r[6]);
+            }
             return true;
         case 0x36: // close(fd)
             r[2] = (uint32_t)bios_file_close(ctx, r[4]);
@@ -394,6 +462,37 @@ bool ps1_bios_handle_b0(PS1Context* ctx, uint32_t func) {
             ctx->bios.heap_cur = r[4];
             r[2] = ctx->bios.heap_base;
             return true;
+        case 0x4A: // _card_info(port)
+        case 0x4B: // _card_status(port)
+            r[2] = 1;
+            return true;
+        case 0x4E: // _card_read(port, block, buf)
+            {
+                int port = (int)r[4];
+                int block = (int)r[5];
+                void* buf = get_host_ptr(ctx, r[6]);
+                if (buf && ps1_card_read_frame(&ctx->card_mgr, port, block, buf)) {
+                    r[2] = 1;
+                } else {
+                    r[2] = 0;
+                }
+            }
+            return true;
+        case 0x4F: // _card_write(port, block, buf)
+            {
+                int port = (int)r[4];
+                int block = (int)r[5];
+                const void* buf = get_host_ptr(ctx, r[6]);
+                if (buf && ps1_card_write_frame(&ctx->card_mgr, port, block, buf)) {
+                    r[2] = 1;
+                } else {
+                    r[2] = 0;
+                }
+            }
+            return true;
+        case 0x50: // _card_clear(port)
+            r[2] = 1;
+            return true;
         case 0x56: // GetGraphType()
             r[2] = 2; // PSX
             return true;
@@ -402,6 +501,19 @@ bool ps1_bios_handle_b0(PS1Context* ctx, uint32_t func) {
             return true;
         case 0x5C: // CdSearchFile(fp, name)
             return do_cd_search_file(ctx);
+        case 0x5D: // format(name)
+            {
+                const char* name = (const char*)get_host_ptr(ctx, r[4]);
+                if (name) {
+                    int slot = (strncasecmp(name, "bu10:", 5) == 0) ? 1 : 0;
+                    ps1_card_format(&ctx->card_mgr, slot);
+                    ps1_card_save(&ctx->card_mgr, slot);
+                    r[2] = 1;
+                } else {
+                    r[2] = 0;
+                }
+            }
+            return true;
         default:
             return false;
     }

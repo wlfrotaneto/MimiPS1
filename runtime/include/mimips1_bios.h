@@ -22,6 +22,9 @@ typedef struct {
 
 typedef struct {
     bool     is_open;
+    bool     is_card;
+    int      card_slot;     // 0 = bu00:, 1 = bu10:
+    int      card_file_idx; // Slot index (0..14)
     uint32_t start_lba;
     uint32_t file_size;
     uint32_t cur_offset;

@@ -163,6 +163,7 @@ def compile_native_app(recompiled_dir, app_name):
         os.path.join(runtime_src_dir, "mimips1_cdrom.c"),
         os.path.join(runtime_src_dir, "mimips1_bios.c"),
         os.path.join(runtime_src_dir, "mimips1_input.c"),
+        os.path.join(runtime_src_dir, "mimips1_card.c"),
         os.path.join(runtime_src_dir, "mimips1_runtime.c"),
         os.path.join(platform_dir, "macos_metal.m"),
         os.path.join(platform_dir, "macos_audio.m"),

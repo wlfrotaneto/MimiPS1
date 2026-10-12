@@ -17,6 +17,8 @@ PS1Context* ps1_runtime_create(void) {
     ps1_cdrom_init(&ctx->cdrom);
     ps1_bios_init(ctx);
     ps1_input_init(&ctx->input);
+    ps1_card_init(&ctx->card_mgr);
+    ps1_card_auto_setup(&ctx->card_mgr);
 
     ctx->running = true;
     ctx->aspect_ratio = 0; // 4:3
@@ -25,6 +27,7 @@ PS1Context* ps1_runtime_create(void) {
 
 void ps1_runtime_destroy(PS1Context* ctx) {
     if (!ctx) return;
+    ps1_card_reset(&ctx->card_mgr);
     ps1_cdrom_close_image(&ctx->cdrom);
     free(ctx);
 }
@@ -41,6 +44,8 @@ void ps1_runtime_reset(PS1Context* ctx) {
     ps1_cdrom_reset(&ctx->cdrom);
     ps1_bios_reset(ctx);
     ps1_input_reset(&ctx->input);
+    ps1_card_reset(&ctx->card_mgr);
+    ps1_card_auto_setup(&ctx->card_mgr);
     ctx->irq_stat = 0;
     ctx->irq_mask = 0;
     ctx->frame_count = 0;
