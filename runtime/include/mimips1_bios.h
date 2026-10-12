@@ -20,15 +20,23 @@ typedef struct {
 
 #define PS1_MAX_EVENTS 32
 
+typedef struct {
+    bool     is_open;
+    uint32_t start_lba;
+    uint32_t file_size;
+    uint32_t cur_offset;
+    char     name[64];
+} PS1OpenFile;
+
 struct PS1BIOS {
-    bool     hle_enabled;
-    PS1Event events[PS1_MAX_EVENTS];
-    uint32_t heap_base;
-    uint32_t heap_size;
-    uint32_t heap_cur;
+    bool        hle_enabled;
+    PS1Event    events[PS1_MAX_EVENTS];
+    uint32_t    heap_base;
+    uint32_t    heap_size;
+    uint32_t    heap_cur;
     
     // File descriptors (for cdrom: and bu00:)
-    FILE*    fds[16];
+    PS1OpenFile files[16];
 };
 
 void ps1_bios_init(PS1Context* ctx);

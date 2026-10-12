@@ -52,6 +52,22 @@ extern void macos_audio_shutdown(void);
 
 - (void)keyDown:(NSEvent *)event {
     if (!_context) return;
+    if (event.modifierFlags & NSEventModifierFlagCommand) {
+        if (event.keyCode == 3) { // Cmd+F: Toggle Full Screen
+            [self.window toggleFullScreen:nil];
+            return;
+        } else if (event.keyCode == 1) { // Cmd+S: Toggle CRT Scanlines
+            _context->crt_scanlines = !_context->crt_scanlines;
+            return;
+        }
+    }
+    if (event.keyCode == 53) { // Escape
+        if ([self.window styleMask] & NSWindowStyleMaskFullScreen) {
+            [self.window toggleFullScreen:nil];
+            return;
+        }
+    }
+
     PS1Input* input = &_context->input;
     switch (event.keyCode) {
         case 126: ps1_input_set_button(input, 0, PS1_BTN_UP, true); break;    // Up arrow
@@ -119,12 +135,15 @@ int run_native_macos_app(PS1Context* ctx, const char* window_title) {
                                                          backing:NSBackingStoreBuffered
                                                            defer:NO];
         [window setTitle:[NSString stringWithFormat:@"%@ [Apple Silicon]", appName]];
+        [window setCollectionBehavior:NSWindowCollectionBehaviorFullScreenPrimary];
+        [window setMinSize:NSMakeSize(640, 480)];
         [window center];
 
         // Create Metal View
         id<MTLDevice> device = MTLCreateSystemDefaultDevice();
         MTKView* mtkView = [[MTKView alloc] initWithFrame:frame device:device];
         mtkView.colorPixelFormat = MTLPixelFormatBGRA8Unorm;
+        mtkView.clearColor = MTLClearColorMake(0.0, 0.0, 0.0, 1.0);
         mtkView.preferredFramesPerSecond = 60;
 
         MimiPS1ViewDelegate* delegate = [[MimiPS1ViewDelegate alloc] initWithContext:ctx device:device];

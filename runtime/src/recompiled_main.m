@@ -22,7 +22,8 @@ int main(int argc, char** argv) {
         ps1_init_recompiled_game(ctx);
     }
 
-    const char* app_name = "MimiPS1 - Recompiled Native macOS";
+    NSString* bundleName = [[[NSBundle mainBundle] infoDictionary] objectForKey:@"CFBundleName"];
+    const char* app_name = bundleName ? [bundleName UTF8String] : "MimiPS1 - Recompiled Native macOS";
 
     // Auto-detect resources from App Bundle and User directories
     @autoreleasepool {

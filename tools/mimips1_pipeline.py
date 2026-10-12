@@ -200,6 +200,28 @@ def package_bundle_and_dmg(bin_path, app_name, disc_path=None, boot_exe=None, bi
     app_path = os.path.join(BUILD_DIR, f"{app_name}.app")
     run_command(f"chmod +x \"{dmg_script}\" && \"{dmg_script}\" \"{app_path}\" \"{app_name}-AppleSilicon\" \"{DIST_DIR}\"", silent=True)
 
+def resolve_input_path(input_path):
+    if not os.path.isfile(input_path):
+        return input_path
+    ext = os.path.splitext(input_path)[1].lower()
+    if ext == '.cue':
+        cue_dir = os.path.dirname(os.path.abspath(input_path))
+        try:
+            with open(input_path, 'r', errors='ignore') as f:
+                for line in f:
+                    line = line.strip()
+                    if line.upper().startswith("FILE"):
+                        parts = line.split('"')
+                        if len(parts) >= 2:
+                            bin_name = parts[1]
+                            candidate = os.path.join(cue_dir, bin_name)
+                            if os.path.isfile(candidate):
+                                print(f"🎵 {CYAN}Parsed CUE sheet:{RESET} referencing '{bin_name}'")
+                                return candidate
+        except Exception:
+            pass
+    return input_path
+
 def main():
     print_banner()
 
@@ -207,22 +229,26 @@ def main():
     subparsers = parser.add_subparsers(dest="command")
 
     recomp_p = subparsers.add_parser("pipeline", help="Run full pipeline: Recompilation + Native Clang Build + DMG Packaging")
-    recomp_p.add_argument("exe", help="Path to executable or disc image (.EXE, .BIN, .ISO)")
+    recomp_p.add_argument("exe", help="Path to executable or disc image (.EXE, .BIN, .ISO, .CUE)")
     recomp_p.add_argument("--name", default="PS1RecompiledGame", help="macOS application name")
     recomp_p.add_argument("--output", default=os.path.join(BUILD_DIR, "recompiled"), help="Output directory for generated C source")
-    recomp_p.add_argument("--embed-disc", action="store_true", help="Embed CD disc image (.bin/.iso) into final app bundle")
+    recomp_p.add_argument("--embed-disc", action="store_true", default=True, help="Embed CD disc image into final app bundle (default: True)")
+    recomp_p.add_argument("--no-embed-disc", dest="embed_disc", action="store_false", help="Do not embed CD disc image into app bundle")
     recomp_p.add_argument("--bios", default=None, help="Path to official PS1 BIOS image (e.g. SCPH1001.BIN)")
+    recomp_p.add_argument("--install", "-i", action="store_true", help="Install generated .app directly into /Applications")
+    recomp_p.add_argument("--no-dmg", action="store_true", help="Skip DMG disk image packaging")
 
     args = parser.parse_args()
     if args.command == "pipeline":
-        print(f"▶️  {BOLD}[Step 1/3] Processing and Recompiling MIPS R3000A:{RESET} {args.exe}")
-        boot_exe = recompile_exe(args.exe, args.output)
+        actual_input = resolve_input_path(args.exe)
+        print(f"▶️  {BOLD}[Step 1/3] Processing and Recompiling MIPS R3000A:{RESET} {actual_input}")
+        boot_exe = recompile_exe(actual_input, args.output)
 
         print(f"\n▶️  {BOLD}[Step 2/3] Building Native Binary:{RESET} {args.name}")
         bin_path = compile_native_app(args.output, args.name)
 
-        is_disc = os.path.isfile(args.exe) and os.path.splitext(args.exe)[1].lower() in ['.bin', '.iso', '.img']
-        disc_to_embed = args.exe if (is_disc and args.embed_disc) else None
+        is_disc = os.path.isfile(actual_input) and os.path.splitext(actual_input)[1].lower() in ['.bin', '.iso', '.img']
+        disc_to_embed = actual_input if (is_disc and args.embed_disc) else None
 
         bios_path = args.bios
         if not bios_path:
@@ -232,15 +258,34 @@ def main():
                 print(f"🔍 {CYAN}Auto-detected user BIOS in Downloads:{RESET} {bios_path}")
 
         print(f"\n▶️  {BOLD}[Step 3/3] Packaging App Bundle and DMG Installer...{RESET}")
-        package_bundle_and_dmg(bin_path, args.name, disc_path=disc_to_embed, boot_exe=boot_exe, bios_path=bios_path)
+        app_path = os.path.join(BUILD_DIR, f"{args.name}.app")
+        app_script = os.path.join(ROOT_DIR, "tools", "build_app_bundle.sh")
+        disc_arg = f'"{disc_to_embed}"' if disc_to_embed else '""'
+        boot_arg = f'"{boot_exe}"' if boot_exe and os.path.isfile(boot_exe) else '""'
+        bios_arg = f'"{bios_path}"' if bios_path and os.path.isfile(bios_path) else '""'
+        print(f"📦 {BOLD}Building macOS app bundle: {args.name}.app...{RESET}")
+        run_command(f"chmod +x \"{app_script}\" && \"{app_script}\" \"{bin_path}\" \"{args.name}\" \"{BUILD_DIR}\" {disc_arg} {boot_arg} {bios_arg}", silent=True)
 
-        dmg_file = os.path.join(DIST_DIR, f"{args.name}-AppleSilicon.dmg")
-        app_file = os.path.join(BUILD_DIR, f"{args.name}.app")
+        dmg_file = None
+        if not args.no_dmg:
+            print(f"💿 {BOLD}Packaging DMG installer with UDZO compression...{RESET}")
+            dmg_script = os.path.join(ROOT_DIR, "tools", "package_dmg.sh")
+            run_command(f"chmod +x \"{dmg_script}\" && \"{dmg_script}\" \"{app_path}\" \"{args.name}-AppleSilicon\" \"{DIST_DIR}\"", silent=True)
+            dmg_file = os.path.join(DIST_DIR, f"{args.name}-AppleSilicon.dmg")
+
+        if args.install:
+            dest_app = f"/Applications/{args.name}.app"
+            print(f"🚀 {BOLD}Installing to /Applications:{RESET} {dest_app}...")
+            run_command(f'rm -rf "{dest_app}" && cp -R "{app_path}" "/Applications/"')
+            print(f"   {GREEN}✅ Successfully installed {args.name}.app to /Applications!{RESET}")
 
         print(f"\n{GREEN}{BOLD}═══════════════════════════════════════════════════════════════{RESET}")
         print(f"{GREEN}{BOLD}✨ Pipeline Completed Successfully!{RESET}")
-        print(f"📦 {BOLD}Native App:{RESET}      {app_file}")
-        print(f"💿 {BOLD}DMG Installer:{RESET}   {dmg_file}")
+        print(f"📦 {BOLD}Native App:{RESET}      {app_path}")
+        if dmg_file:
+            print(f"💿 {BOLD}DMG Installer:{RESET}   {dmg_file}")
+        if args.install:
+            print(f"🚀 {BOLD}Applications:{RESET}    /Applications/{args.name}.app")
         print(f"{GREEN}{BOLD}═══════════════════════════════════════════════════════════════{RESET}\n")
     else:
         parser.print_help()

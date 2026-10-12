@@ -132,7 +132,25 @@ static const char* metal_shader_src =
         [encoder setRenderPipelineState:_pipelineState];
         [encoder setFragmentTexture:_vramTexture atIndex:0];
         [encoder setFragmentSamplerState:_samplerState atIndex:0];
-        
+
+        // Maintain authentic 4:3 PS1 aspect ratio with pillarbox / letterbox
+        CGSize drawableSize = view.drawableSize;
+        if (drawableSize.width > 0 && drawableSize.height > 0) {
+            float targetAspect = 4.0f / 3.0f;
+            float currentAspect = (float)drawableSize.width / (float)drawableSize.height;
+            MTLViewport vp;
+            if (currentAspect > targetAspect) {
+                float vpWidth = drawableSize.height * targetAspect;
+                float vpX = (drawableSize.width - vpWidth) * 0.5f;
+                vp = (MTLViewport){ vpX, 0.0, vpWidth, drawableSize.height, 0.0, 1.0 };
+            } else {
+                float vpHeight = drawableSize.width / targetAspect;
+                float vpY = (drawableSize.height - vpHeight) * 0.5f;
+                vp = (MTLViewport){ 0.0, vpY, drawableSize.width, vpHeight, 0.0, 1.0 };
+            }
+            [encoder setViewport:vp];
+        }
+
         int disp_x = _context->gpu.disp_x;
         int disp_y = _context->gpu.disp_y;
         int disp_w = _context->gpu.disp_w > 0 ? _context->gpu.disp_w : 320;

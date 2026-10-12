@@ -62,6 +62,17 @@ void     ps1_cdrom_reset(PS1CDROM* cdrom);
 bool     ps1_cdrom_open_image(PS1CDROM* cdrom, const char* path);
 void     ps1_cdrom_close_image(PS1CDROM* cdrom);
 
+// ISO9660 filesystem functions
+typedef struct {
+    uint32_t lba;
+    uint32_t size;
+    bool     is_dir;
+    char     name[64];
+} PS1ISOFile;
+
+bool     ps1_cdrom_find_file(PS1CDROM* cdrom, const char* filename, PS1ISOFile* out_file);
+bool     ps1_cdrom_read_bytes(PS1CDROM* cdrom, uint32_t lba, uint32_t offset_in_file, void* dst, uint32_t size);
+
 uint8_t  ps1_cdrom_read(PS1Context* ctx, uint32_t addr);
 void     ps1_cdrom_write(PS1Context* ctx, uint32_t addr, uint8_t val);
 void     ps1_cdrom_tick(PS1Context* ctx, uint32_t cycles);

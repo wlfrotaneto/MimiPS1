@@ -216,3 +216,109 @@ void ps1_cdrom_write(PS1Context* ctx, uint32_t addr, uint8_t val) {
             break;
     }
 }
+
+// -------------------------------------------------------------
+// ISO9660 Filesystem Implementation for CD-ROM Images
+// -------------------------------------------------------------
+
+static bool read_iso_sector(PS1CDROM* cdrom, uint32_t lba, uint8_t* buf) {
+    if (!cdrom || !cdrom->image_file) return false;
+    long offset = (long)lba * cdrom->sector_size + cdrom->data_offset;
+    if (fseek(cdrom->image_file, offset, SEEK_SET) != 0) return false;
+    return fread(buf, 1, 2048, cdrom->image_file) == 2048;
+}
+
+static bool iso_name_match(const char* pattern, const char* entry, int entry_len) {
+    char clean_entry[64];
+    int len = entry_len < 63 ? entry_len : 63;
+    memcpy(clean_entry, entry, len);
+    clean_entry[len] = '\0';
+    char* semi = strchr(clean_entry, ';');
+    if (semi) *semi = '\0';
+
+    // Strip leading path prefix from pattern (e.g. "cdrom:\", "\", etc.)
+    const char* p = pattern;
+    if (strncasecmp(p, "cdrom:", 6) == 0) p += 6;
+    while (*p == '\\' || *p == '/') p++;
+
+    // Strip trailing version from pattern if present
+    char clean_pat[64];
+    strncpy(clean_pat, p, 63);
+    clean_pat[63] = '\0';
+    char* pat_semi = strchr(clean_pat, ';');
+    if (pat_semi) *pat_semi = '\0';
+
+    return strcasecmp(clean_pat, clean_entry) == 0;
+}
+
+bool ps1_cdrom_find_file(PS1CDROM* cdrom, const char* filename, PS1ISOFile* out_file) {
+    if (!cdrom || !cdrom->image_file || !filename || !out_file) return false;
+
+    // Read Primary Volume Descriptor (PVD) at LBA 16
+    uint8_t pvd[2048];
+    if (!read_iso_sector(cdrom, 16, pvd)) return false;
+
+    if (memcmp(&pvd[1], "CD001", 5) != 0) return false;
+
+    const uint8_t* root_rec = &pvd[156];
+    uint32_t root_lba = *(const uint32_t*)&root_rec[2];
+    uint32_t root_size = *(const uint32_t*)&root_rec[10];
+
+    uint32_t sectors = (root_size + 2047) / 2048;
+    uint8_t sec_buf[2048];
+
+    for (uint32_t s = 0; s < sectors; s++) {
+        if (!read_iso_sector(cdrom, root_lba + s, sec_buf)) break;
+
+        uint32_t pos = 0;
+        while (pos < 2048) {
+            uint8_t rec_len = sec_buf[pos];
+            if (rec_len == 0) break;
+
+            uint32_t file_lba = *(const uint32_t*)&sec_buf[pos + 2];
+            uint32_t file_size = *(const uint32_t*)&sec_buf[pos + 10];
+            uint8_t flags = sec_buf[pos + 25];
+            uint8_t name_len = sec_buf[pos + 32];
+            const char* name_ptr = (const char*)&sec_buf[pos + 33];
+
+            if (name_len > 0 && iso_name_match(filename, name_ptr, name_len)) {
+                out_file->lba = file_lba;
+                out_file->size = file_size;
+                out_file->is_dir = (flags & 2) != 0;
+                int copy_len = name_len < 63 ? name_len : 63;
+                memcpy(out_file->name, name_ptr, copy_len);
+                out_file->name[copy_len] = '\0';
+                char* semi = strchr(out_file->name, ';');
+                if (semi) *semi = '\0';
+                return true;
+            }
+
+            pos += rec_len;
+        }
+    }
+
+    return false;
+}
+
+bool ps1_cdrom_read_bytes(PS1CDROM* cdrom, uint32_t lba, uint32_t offset_in_file, void* dst, uint32_t size) {
+    if (!cdrom || !cdrom->image_file || !dst || size == 0) return false;
+
+    uint32_t start_sec = lba + (offset_in_file / 2048);
+    uint32_t sec_off = offset_in_file % 2048;
+    uint8_t* out = (uint8_t*)dst;
+    uint32_t remaining = size;
+
+    uint8_t sec_buf[2048];
+    while (remaining > 0) {
+        if (!read_iso_sector(cdrom, start_sec, sec_buf)) return false;
+        uint32_t to_copy = 2048 - sec_off;
+        if (to_copy > remaining) to_copy = remaining;
+        memcpy(out, sec_buf + sec_off, to_copy);
+        out += to_copy;
+        remaining -= to_copy;
+        start_sec++;
+        sec_off = 0;
+    }
+
+    return true;
+}

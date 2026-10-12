@@ -39,6 +39,14 @@ if [ -n "${BIOS_PATH}" ] && [ -f "${BIOS_PATH}" ]; then
     cp "${BIOS_PATH}" "${RESOURCES_DIR}/bios.bin"
 fi
 
+# Embed AppIcon if available
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ICON_SRC="${SCRIPT_DIR}/../assets/AppIcon.icns"
+if [ -f "${ICON_SRC}" ]; then
+    echo "==> Embedding AppIcon.icns into App Resources"
+    cp "${ICON_SRC}" "${RESOURCES_DIR}/AppIcon.icns"
+fi
+
 # Generate Info.plist
 cat << EOF > "${APP_BUNDLE}/Contents/Info.plist"
 <?xml version="1.0" encoding="UTF-8"?>
@@ -49,6 +57,8 @@ cat << EOF > "${APP_BUNDLE}/Contents/Info.plist"
     <string>en</string>
     <key>CFBundleExecutable</key>
     <string>${APP_NAME}</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleIdentifier</key>
     <string>com.mimips1.${APP_NAME}</string>
     <key>CFBundleInfoDictionaryVersion</key>
