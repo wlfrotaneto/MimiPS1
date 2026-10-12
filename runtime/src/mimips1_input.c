@@ -37,9 +37,20 @@ void ps1_input_set_stick(PS1Input* input, int pad_idx, bool right_stick, uint8_t
     }
 }
 
+void ps1_input_set_analog(PS1Input* input, int pad_idx, bool enabled) {
+    if (pad_idx < 0 || pad_idx > 1) return;
+    input->pads[pad_idx].is_analog = enabled;
+}
+
+void ps1_input_set_rumble_callback(PS1Input* input, PS1RumbleCallback cb, void* userdata) {
+    input->rumble_cb = cb;
+    input->rumble_userdata = userdata;
+}
+
 static uint8_t exchange_byte(PS1Input* input, uint8_t tx) {
     uint8_t rx = 0xFF;
-    PS1Controller* p = &input->pads[0];
+    int pad_idx = (input->ctrl & (1 << 13)) ? 1 : 0;
+    PS1Controller* p = &input->pads[pad_idx];
 
     switch (input->pad_state) {
         case 0: // Idle
@@ -62,11 +73,18 @@ static uint8_t exchange_byte(PS1Input* input, uint8_t tx) {
             break;
         case 3:
             rx = (uint8_t)(p->buttons & 0xFF); // Buttons low byte
+            if (p->is_analog) {
+                p->rumble_small = (tx == 0x01) ? 1 : 0;
+            }
             input->pad_state = 4;
             break;
         case 4:
             rx = (uint8_t)((p->buttons >> 8) & 0xFF); // Buttons high byte
             if (p->is_analog) {
+                p->rumble_large = tx;
+                if (input->rumble_cb) {
+                    input->rumble_cb(pad_idx, p->rumble_small, p->rumble_large, input->rumble_userdata);
+                }
                 input->pad_state = 5;
             } else {
                 input->pad_state = 0;

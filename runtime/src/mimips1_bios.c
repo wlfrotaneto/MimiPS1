@@ -345,8 +345,18 @@ bool ps1_bios_handle_b0(PS1Context* ctx, uint32_t func) {
 
     switch (func) {
         case 0x12: // InitPAD(buf1, len1, buf2, len2)
+            ctx->bios.pad_buf[0] = r[4];
+            ctx->bios.pad_len[0] = r[5];
+            ctx->bios.pad_buf[1] = r[6];
+            ctx->bios.pad_len[1] = r[7];
+            r[2] = 1;
+            return true;
         case 0x13: // StartPAD()
+            ctx->bios.pad_active = true;
+            r[2] = 1;
+            return true;
         case 0x14: // StopPAD()
+            ctx->bios.pad_active = false;
             r[2] = 1;
             return true;
         case 0x17: // DeliverEvent(class, spec)
@@ -554,4 +564,30 @@ bool ps1_bios_handle_syscall(PS1Context* ctx) {
         return true;
     }
     return false;
+}
+
+void ps1_bios_update_pads(PS1Context* ctx) {
+    if (!ctx || !ctx->bios.pad_active) return;
+
+    for (int i = 0; i < 2; i++) {
+        uint32_t buf_addr = ctx->bios.pad_buf[i];
+        uint32_t len = ctx->bios.pad_len[i];
+        if (!buf_addr || len < 4) continue;
+
+        uint8_t* p = (uint8_t*)get_host_ptr(ctx, buf_addr);
+        if (!p) continue;
+
+        PS1Controller* pad = &ctx->input.pads[i];
+        p[0] = 0x00; // Success / controller connected
+        p[1] = pad->is_analog ? 0x73 : 0x41; // Terminal type
+        p[2] = (uint8_t)(pad->buttons & 0xFF);
+        p[3] = (uint8_t)((pad->buttons >> 8) & 0xFF);
+
+        if (pad->is_analog && len >= 8) {
+            p[4] = pad->right_stick_x;
+            p[5] = pad->right_stick_y;
+            p[6] = pad->left_stick_x;
+            p[7] = pad->left_stick_y;
+        }
+    }
 }

@@ -179,8 +179,8 @@ def compile_native_app(recompiled_dir, app_name):
     os.makedirs(BUILD_DIR, exist_ok=True)
 
     sources_str = " ".join([f'"{s}"' for s in runtime_sources])
-    frameworks = "-framework Cocoa -framework Metal -framework MetalKit -framework AudioToolbox -framework GameController"
-    cflags = f"-O2 -arch arm64 -I\"{runtime_inc}\" -I\"{recompiled_dir}\" -Wall -Wno-unused-variable -Wno-unused-label -Wno-parentheses"
+    frameworks = "-framework Cocoa -framework Metal -framework MetalKit -framework AudioToolbox -framework GameController -framework CoreHaptics"
+    cflags = f"-O2 -arch arm64 -fobjc-arc -I\"{runtime_inc}\" -I\"{recompiled_dir}\" -Wall -Wno-unused-variable -Wno-unused-label -Wno-parentheses"
 
     cmd = f"clang {cflags} {sources_str} {frameworks} -o \"{output_bin}\""
     run_command(cmd)

@@ -48,6 +48,7 @@ target_link_libraries(mimips1-runtime PUBLIC
     "-framework MetalKit"
     "-framework AudioToolbox"
     "-framework GameController"
+    "-framework CoreHaptics"
 )
 
 # 3. Native App Executable
