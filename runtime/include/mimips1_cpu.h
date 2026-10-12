@@ -57,6 +57,9 @@ void ps1_cpu_reset(PS1Context* ctx);
 
 // Function registration for static recompilation
 void ps1_register_function(PS1Context* ctx, uint32_t mips_addr, PS1RecompiledFunc func);
+// Registers func for every word in [start, end] whose slot is still empty.
+// Used for mid-function entry trampolines (targets reached only via function pointers).
+void ps1_register_function_range(PS1Context* ctx, uint32_t start, uint32_t end, PS1RecompiledFunc func);
 
 // Fast Indirect Branch Dispatcher
 void ps1_call_indirect(PS1Context* ctx, uint32_t target_pc);

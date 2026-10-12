@@ -104,6 +104,29 @@ void ps1_trigger_irq(PS1Context* ctx, uint32_t irq_bit) {
         ctx->cpu.cop0[COP0_CAUSE] |= (1 << 10);
     }
 
+    // Deliver to registered Psy-Q interrupt callbacks if present
+    if (ctx->bios.irq_callback_table != 0) {
+        for (int i = 0; i <= 10; i++) {
+            if (irq_bit & (1 << i)) {
+                uint32_t cb_func = ps1_mem_read32(ctx, ctx->bios.irq_callback_table + (i * 4));
+                if (cb_func != 0) {
+                    uint32_t saved_r[32];
+                    uint32_t saved_pc = ctx->cpu.pc;
+                    uint32_t saved_hi = ctx->cpu.hi;
+                    uint32_t saved_lo = ctx->cpu.lo;
+                    memcpy(saved_r, ctx->cpu.r, sizeof(saved_r));
+
+                    ps1_call_indirect(ctx, cb_func);
+
+                    memcpy(ctx->cpu.r, saved_r, sizeof(saved_r));
+                    ctx->cpu.pc = saved_pc;
+                    ctx->cpu.hi = saved_hi;
+                    ctx->cpu.lo = saved_lo;
+                }
+            }
+        }
+    }
+
     // Deliver corresponding BIOS events to waiting game loops and callbacks
     if (irq_bit & IRQ_VBLANK) {
         ps1_bios_update_pads(ctx);

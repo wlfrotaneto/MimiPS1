@@ -4,6 +4,17 @@
 #include <stdlib.h>
 #include <string.h>
 
+// Diagnostic: report each unimplemented BIOS function only once
+static void bios_log_unhandled(char table, uint32_t func, PS1Context* ctx) {
+    static uint8_t seen[3][256];
+    int t = (table == 'A') ? 0 : (table == 'B') ? 1 : 2;
+    uint32_t f = func & 0xFF;
+    if (seen[t][f]) return;
+    seen[t][f] = 1;
+    fprintf(stderr, "[BIOS] Unimplemented %c0:%02X (ra=0x%08X a0=0x%08X a1=0x%08X)\n",
+            table, f, ctx->cpu.r[31], ctx->cpu.r[4], ctx->cpu.r[5]);
+}
+
 void ps1_bios_init(PS1Context* ctx) {
     memset(&ctx->bios, 0, sizeof(PS1BIOS));
     ctx->bios.hle_enabled = true;
@@ -19,8 +30,8 @@ void ps1_bios_reset(PS1Context* ctx) {
 // Convert MIPS virtual address to host RAM pointer if possible
 static void* get_host_ptr(PS1Context* ctx, uint32_t addr) {
     uint32_t paddr = addr & 0x1FFFFFFF;
-    if (paddr < PS1_RAM_SIZE) {
-        return &ctx->memory.ram[paddr];
+    if (paddr < 0x00800000) {
+        return &ctx->memory.ram[paddr & PS1_RAM_MIRROR_MASK];
     }
     return NULL;
 }
@@ -149,6 +160,11 @@ static int bios_file_read(PS1Context* ctx, int fd, void* dst, int length) {
 }
 
 static int bios_file_write(PS1Context* ctx, int fd, const void* src, int length) {
+    if ((fd == 1 || fd == 2) && src && length > 0) {
+        fwrite(src, 1, length, stdout);
+        fflush(stdout);
+        return length;
+    }
     if (fd < 0 || fd >= 16 || !ctx->bios.files[fd].is_open || !src || length <= 0) return -1;
     PS1OpenFile* f = &ctx->bios.files[fd];
 
@@ -322,19 +338,44 @@ bool ps1_bios_handle_a0(PS1Context* ctx, uint32_t func) {
             return true;
         case 0x44: // FlushCache()
             return true;
+        case 0x70: // _bu_init()
+        case 0x71: // _bu_deinit()
+            r[2] = 0;
+            return true;
+        case 0x72: // SetCustomExitFromException / SetInterruptCallbackTable
+            ctx->bios.irq_callback_table = r[5]; // r[5] ($a1) is the callback table
+            printf("[BIOS A0:72] SetInterruptCallbackTable at 0x%08X (struct=0x%08X)\n", r[5], r[4]);
+            r[2] = 0;
+            return true;
+        case 0xAD: // set_card_auto_format(flag)
+            r[2] = 0;
+            return true;
         default:
+            bios_log_unhandled('A', func, ctx);
             return false;
     }
 }
 
 void ps1_bios_deliver_event(PS1Context* ctx, uint32_t class_id, uint32_t spec) {
     for (int i = 0; i < PS1_MAX_EVENTS; i++) {
-        if (ctx->bios.events[i].enabled &&
+        if (ctx->bios.events[i].is_open && ctx->bios.events[i].enabled &&
             ctx->bios.events[i].class_id == class_id &&
             (ctx->bios.events[i].spec == spec || ctx->bios.events[i].spec == 0)) {
             ctx->bios.events[i].triggered = true;
-            if (ctx->bios.events[i].func != 0) {
+            if (ctx->bios.events[i].func != 0 && ctx->bios.events[i].func != 0xFFFFFFFF) {
+                // Save complete CPU context so interrupt callback does not corrupt active registers
+                uint32_t saved_r[32];
+                uint32_t saved_pc = ctx->cpu.pc;
+                uint32_t saved_hi = ctx->cpu.hi;
+                uint32_t saved_lo = ctx->cpu.lo;
+                memcpy(saved_r, ctx->cpu.r, sizeof(saved_r));
+
                 ps1_call_indirect(ctx, ctx->bios.events[i].func);
+
+                memcpy(ctx->cpu.r, saved_r, sizeof(saved_r));
+                ctx->cpu.pc = saved_pc;
+                ctx->cpu.hi = saved_hi;
+                ctx->cpu.lo = saved_lo;
             }
         }
     }
@@ -342,6 +383,9 @@ void ps1_bios_deliver_event(PS1Context* ctx, uint32_t class_id, uint32_t spec) {
 
 bool ps1_bios_handle_b0(PS1Context* ctx, uint32_t func) {
     uint32_t* r = ctx->cpu.r;
+    if (func != 0x3D) {
+        printf("[BIOS B0] 0x%02X (a0=0x%08X, a1=0x%08X)\n", func, r[4], r[5]);
+    }
 
     switch (func) {
         case 0x12: // InitPAD(buf1, len1, buf2, len2)
@@ -359,18 +403,21 @@ bool ps1_bios_handle_b0(PS1Context* ctx, uint32_t func) {
             ctx->bios.pad_active = false;
             r[2] = 1;
             return true;
-        case 0x17: // DeliverEvent(class, spec)
+        case 0x07: // DeliverEvent(class, spec) (Rev 1)
+        case 0x17: // DeliverEvent(class, spec) (Rev 2)
             ps1_bios_deliver_event(ctx, r[4], r[5]);
             r[2] = 0;
             return true;
-        case 0x18: // OpenEvent(class, spec, mode, func)
+        case 0x08: // OpenEvent(class, spec, mode, func) (Rev 1)
+        case 0x18: // OpenEvent(class, spec, mode, func) (Rev 2)
             for (int i = 0; i < PS1_MAX_EVENTS; i++) {
-                if (!ctx->bios.events[i].enabled && !ctx->bios.events[i].triggered) {
+                if (!ctx->bios.events[i].is_open) {
                     ctx->bios.events[i].class_id = r[4];
                     ctx->bios.events[i].spec = r[5];
                     ctx->bios.events[i].mode = r[6];
                     ctx->bios.events[i].func = r[7];
-                    ctx->bios.events[i].enabled = true;
+                    ctx->bios.events[i].is_open = true;
+                    ctx->bios.events[i].enabled = false;
                     ctx->bios.events[i].triggered = false;
                     r[2] = i | 0xF0000000;
                     return true;
@@ -378,25 +425,23 @@ bool ps1_bios_handle_b0(PS1Context* ctx, uint32_t func) {
             }
             r[2] = 0xFFFFFFFF;
             return true;
-        case 0x19: // CloseEvent(event)
+        case 0x09: // CloseEvent(event) (Rev 1)
+        case 0x19: // CloseEvent(event) (Rev 2)
             {
-                int ev_idx = r[4] & 0x1F;
+                int ev_idx = r[4] & (PS1_MAX_EVENTS - 1);
                 if (ev_idx < PS1_MAX_EVENTS) {
+                    ctx->bios.events[ev_idx].is_open = false;
                     ctx->bios.events[ev_idx].enabled = false;
+                    ctx->bios.events[ev_idx].triggered = false;
                     r[2] = 1;
                 }
             }
             return true;
-        case 0x1A: // WaitEvent(event)
+        case 0x0A: // WaitEvent(event) (Rev 1)
+        case 0x1A: // WaitEvent(event) (Rev 2)
             {
-                int ev_idx = r[4] & 0x1F;
+                int ev_idx = r[4] & (PS1_MAX_EVENTS - 1);
                 if (ev_idx < PS1_MAX_EVENTS) {
-                    int attempts = 0;
-                    while (!ctx->bios.events[ev_idx].triggered && attempts++ < 2000) {
-                        ps1_cdrom_tick(ctx, 50000);
-                        ps1_timers_tick(ctx, 50000);
-                        ps1_trigger_irq(ctx, IRQ_VBLANK);
-                    }
                     ctx->bios.events[ev_idx].triggered = false;
                     r[2] = 1;
                 } else {
@@ -404,35 +449,54 @@ bool ps1_bios_handle_b0(PS1Context* ctx, uint32_t func) {
                 }
             }
             return true;
-        case 0x1B: // TestEvent(event)
+        case 0x0B: // TestEvent(event) (Rev 1)
+        case 0x1B: // TestEvent(event) (Rev 2)
             {
-                int ev_idx = r[4] & 0x1F;
-                if (ev_idx < PS1_MAX_EVENTS && ctx->bios.events[ev_idx].triggered) {
+                int ev_idx = r[4] & (PS1_MAX_EVENTS - 1);
+                if (ev_idx < PS1_MAX_EVENTS) {
+                    bool was_trig = ctx->bios.events[ev_idx].triggered;
                     ctx->bios.events[ev_idx].triggered = false;
-                    r[2] = 1;
+                    r[2] = was_trig ? 1 : 1;
                 } else {
                     r[2] = 0;
                 }
             }
             return true;
-        case 0x1C: // EnableEvent(event)
+        case 0x0C: // EnableEvent(event) (Rev 1)
+        case 0x1C: // EnableEvent(event) (Rev 2)
             {
-                int ev_idx = r[4] & 0x1F;
+                int ev_idx = r[4] & (PS1_MAX_EVENTS - 1);
                 if (ev_idx < PS1_MAX_EVENTS) {
                     ctx->bios.events[ev_idx].enabled = true;
                     r[2] = 1;
                 }
             }
             return true;
-        case 0x1D: // DisableEvent(event)
+        case 0x0D: // DisableEvent(event) (Rev 1)
+        case 0x1D: // DisableEvent(event) (Rev 2)
             {
-                int ev_idx = r[4] & 0x1F;
+                int ev_idx = r[4] & (PS1_MAX_EVENTS - 1);
                 if (ev_idx < PS1_MAX_EVENTS) {
                     ctx->bios.events[ev_idx].enabled = false;
                     r[2] = 1;
                 }
             }
             return true;
+        case 0x3D: // std_out_putchar(c)
+            putchar((char)(r[4] & 0xFF));
+            fflush(stdout);
+            r[2] = r[4];
+            return true;
+        case 0x3E: // std_out_puts(s)
+            {
+                const char* s = (const char*)get_host_ptr(ctx, r[4]);
+                if (s) {
+                    printf("%s\n", s);
+                    fflush(stdout);
+                }
+                r[2] = 0;
+                return true;
+            }
         case 0x20: // UnDeliverEvent(class, spec)
             for (int i = 0; i < PS1_MAX_EVENTS; i++) {
                 if (ctx->bios.events[i].class_id == r[4] &&
@@ -503,10 +567,13 @@ bool ps1_bios_handle_b0(PS1Context* ctx, uint32_t func) {
         case 0x50: // _card_clear(port)
             r[2] = 1;
             return true;
-        case 0x56: // GetGraphType()
+        case 0x56: // GetGraphType() / _ChangeClearPAD
             r[2] = 2; // PSX
             return true;
-        case 0x5B: // ChangeClearPAD(val)
+        case 0x57: // GetB0Table()
+            r[2] = 0;
+            return true;
+        case 0x5B: // ChangeClearPAD(val) / ChangeClearRCnt
             r[2] = 0;
             return true;
         case 0x5C: // CdSearchFile(fp, name)
@@ -525,6 +592,7 @@ bool ps1_bios_handle_b0(PS1Context* ctx, uint32_t func) {
             }
             return true;
         default:
+            bios_log_unhandled('B', func, ctx);
             return false;
     }
 }
@@ -535,12 +603,19 @@ bool ps1_bios_handle_c0(PS1Context* ctx, uint32_t func) {
         case 0x00: // EnqueueTimerAndVblankIrqs(priority)
             r[2] = 1;
             return true;
+        case 0x02: // SysEnqIntRP(priority, queue_struct)
+            r[2] = 0;
+            return true;
+        case 0x03: // SysDeqIntRP(priority, queue_struct)
+            r[2] = r[5];
+            return true;
         case 0x0A: // ChangeClearRCnt(rcnt, flag)
             r[2] = 0;
             return true;
         case 0x15: // CdSearchFile(fp, name)
             return do_cd_search_file(ctx);
         default:
+            bios_log_unhandled('C', func, ctx);
             r[2] = 0;
             return true;
     }

@@ -14,11 +14,12 @@ typedef struct {
     uint32_t spec;
     uint32_t mode;
     uint32_t func;
+    bool     is_open;
     bool     enabled;
     bool     triggered;
 } PS1Event;
 
-#define PS1_MAX_EVENTS 32
+#define PS1_MAX_EVENTS 64
 
 typedef struct {
     bool     is_open;
@@ -45,6 +46,9 @@ struct PS1BIOS {
     uint32_t    pad_buf[2];
     uint32_t    pad_len[2];
     bool        pad_active;
+
+    // Psy-Q / Hardware IRQ callback table (registered via A0:72)
+    uint32_t    irq_callback_table;
 };
 
 void ps1_bios_init(PS1Context* ctx);

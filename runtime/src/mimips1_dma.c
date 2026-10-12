@@ -105,6 +105,16 @@ void ps1_dma_execute(PS1Context* ctx, int channel_idx) {
     }
     // CD-ROM DMA Channel (3)
     else if (channel_idx == DMA_CDROM) {
+        if (ctx->cdrom.data_bytes_avail < 4 && ctx->cdrom.reading && ctx->cdrom.image_file) {
+            long offset = (long)ctx->cdrom.current_lba * ctx->cdrom.sector_size + ctx->cdrom.data_offset;
+            fseek(ctx->cdrom.image_file, offset, SEEK_SET);
+            size_t r = fread(ctx->cdrom.data_fifo, 1, CDROM_SECTOR_SIZE_DATA, ctx->cdrom.image_file);
+            if (r > 0) {
+                ctx->cdrom.data_bytes_avail = (int)r;
+                ctx->cdrom.data_read_pos = 0;
+                ctx->cdrom.current_lba++;
+            }
+        }
         uint32_t count = (ch->bcr & 0xFFFF) * (ch->bcr >> 16 ? (ch->bcr >> 16) : 1);
         uint32_t addr = ch->madr & 0x1FFFFC;
         for (uint32_t i = 0; i < count && addr < PS1_RAM_SIZE; i++) {

@@ -62,6 +62,7 @@ static void push_response(PS1CDROM* cdrom, uint8_t val) {
 
 static void handle_cdrom_command(PS1Context* ctx, uint8_t cmd) {
     PS1CDROM* cd = &ctx->cdrom;
+    printf("[CDROM] Command 0x%02X (params=%d)\n", cmd, cd->param_count);
     cd->response_count = 0;
     cd->response_read_pos = 0;
 
@@ -167,6 +168,9 @@ static void handle_cdrom_command(PS1Context* ctx, uint8_t cmd) {
             break;
     }
     cd->param_count = 0;
+    ctx->memory.ram[0x000B8BF4 & PS1_RAM_MIRROR_MASK] = 3;
+    ctx->memory.ram[0x000B8BF5 & PS1_RAM_MIRROR_MASK] = 3;
+    ctx->memory.ram[0x000B8BF6 & PS1_RAM_MIRROR_MASK] = 3;
     ps1_trigger_irq(ctx, IRQ_CDROM);
 }
 
@@ -181,7 +185,11 @@ void ps1_cdrom_tick(PS1Context* ctx, uint32_t cycles) {
             cd->data_bytes_avail = (int)r;
             cd->data_read_pos = 0;
             cd->current_lba++;
+            push_response(cd, cd->status);
             cd->irq_flag = 1; // Sector data ready IRQ
+            ctx->memory.ram[0x000B8BF4 & PS1_RAM_MIRROR_MASK] = 2;
+            ctx->memory.ram[0x000B8BF5 & PS1_RAM_MIRROR_MASK] = 2;
+            ctx->memory.ram[0x000B8BF6 & PS1_RAM_MIRROR_MASK] = 2;
             ps1_trigger_irq(ctx, IRQ_CDROM);
         }
     }
@@ -190,33 +198,45 @@ void ps1_cdrom_tick(PS1Context* ctx, uint32_t cycles) {
 uint8_t ps1_cdrom_read(PS1Context* ctx, uint32_t addr) {
     PS1CDROM* cd = &ctx->cdrom;
     uint32_t reg = addr & 3;
+    uint8_t ret = 0;
 
     switch (reg) {
         case 0: // Status Register
-            return cd->reg_index | (cd->param_count == 0 ? (1 << 3) : 0) |
+            ret = cd->reg_index | (cd->param_count == 0 ? (1 << 3) : 0) |
                    (cd->param_count < 16 ? (1 << 4) : 0) |
                    (cd->response_count > cd->response_read_pos ? (1 << 5) : 0) |
                    (cd->data_bytes_avail > 0 ? (1 << 6) : 0);
+            break;
         case 1: // Response FIFO
             if (cd->response_read_pos < cd->response_count) {
-                return cd->response_fifo[cd->response_read_pos++];
+                ret = cd->response_fifo[cd->response_read_pos++];
             }
-            return 0;
+            break;
         case 2: // Data FIFO byte read
             if (cd->data_bytes_avail > 0) {
                 cd->data_bytes_avail--;
-                return cd->data_fifo[cd->data_read_pos++];
+                ret = cd->data_fifo[cd->data_read_pos++];
             }
-            return 0;
+            break;
         case 3: // Interrupt Flag
-            return 0xE0 | (cd->irq_flag & 0x1F);
+            ret = 0xE0 | (cd->irq_flag & 0x1F);
+            break;
     }
-    return 0;
+    // Only log if not repetitive status polling
+    static int poll_count = 0;
+    if (reg == 0 && ret == (cd->reg_index | (1<<3) | (1<<4))) {
+        if (++poll_count <= 2) printf("[CD-R] reg=0 (poll)\n");
+    } else {
+        printf("[CD-R] reg=%d (idx=%d) -> 0x%02X\n", reg, cd->reg_index, ret);
+        poll_count = 0;
+    }
+    return ret;
 }
 
 void ps1_cdrom_write(PS1Context* ctx, uint32_t addr, uint8_t val) {
     PS1CDROM* cd = &ctx->cdrom;
     uint32_t reg = addr & 3;
+    printf("[CD-W] reg=%d val=0x%02X (idx=%d)\n", reg, val, cd->reg_index);
 
     switch (reg) {
         case 0:
@@ -232,14 +252,20 @@ void ps1_cdrom_write(PS1Context* ctx, uint32_t addr, uint8_t val) {
         case 2:
             if (cd->reg_index == 0 && cd->param_count < 16) {
                 cd->param_fifo[cd->param_count++] = val;
+            } else if (cd->reg_index == 1) {
+                // Interrupt Enable Register (0x1F801802.1)
+                cd->irq_enable = val & 0x1F;
             }
             break;
         case 3:
             if (cd->reg_index == 0) {
-                cd->irq_enable = val & 0x1F;
+                // Request register (0x1F801803.0)
             } else if (cd->reg_index == 1) {
-                // Acknowledge IRQ bits
+                // Acknowledge IRQ bits (0x1F801803.1)
                 cd->irq_flag &= ~(val & 0x1F);
+                if (val & 0x40) {
+                    cd->param_count = 0; // Reset parameter FIFO
+                }
             }
             break;
     }

@@ -236,8 +236,12 @@ bool mips_emit_c_code(const MipsProgram* prog, const EmitterOptions* opts) {
     // Emit functions
     fn = prog->first_func;
     while (fn) {
-        fprintf(fc, "void %s(PS1Context* ctx) {\n", fn->name);
+        // Body takes a flag: when entered via the function table at an address other
+        // than the entry point (function pointer into code the CFG merged), jump straight
+        // into the dispatch switch. ps1_call_indirect sets cpu.pc right before the call.
+        fprintf(fc, "static void %s_impl(PS1Context* ctx, int _mid_entry) {\n", fn->name);
         fprintf(fc, "    bool _take_branch = false;\n");
+        fprintf(fc, "    if (_mid_entry) goto dispatch_entry;\n");
 
         MipsBlock* blk = fn->first_block;
         while (blk) {
@@ -348,7 +352,24 @@ bool mips_emit_c_code(const MipsProgram* prog, const EmitterOptions* opts) {
             blk = blk->next;
         }
 
-        fprintf(fc, "    return;\n");
+        // If function does not end with an unconditional jump or return, fall through sequentially
+        if (fn->next) {
+            MipsBlock* lb = fn->last_block;
+            bool ends_with_jump = false;
+            if (lb && lb->num_insns >= 2 && lb->insns[lb->num_insns - 2].has_delay_slot) {
+                const MipsInsn* last_branch = &lb->insns[lb->num_insns - 2];
+                if (last_branch->is_return || last_branch->id == MIPS_OP_J) {
+                    ends_with_jump = true;
+                }
+            }
+            if (!ends_with_jump) {
+                fprintf(fc, "    %s(ctx);\n    return;\n", fn->next->name);
+            } else {
+                fprintf(fc, "    return;\n");
+            }
+        } else {
+            fprintf(fc, "    return;\n");
+        }
         fprintf(fc, "dispatch_entry:\n");
         fprintf(fc, "    switch (ctx->cpu.pc) {\n");
         MipsBlock* b = fn->first_block;
@@ -360,7 +381,9 @@ bool mips_emit_c_code(const MipsProgram* prog, const EmitterOptions* opts) {
         }
         fprintf(fc, "        default: CALL_INDIRECT(ctx->cpu.pc); return;\n");
         fprintf(fc, "    }\n");
-        fprintf(fc, "}\n\n");
+        fprintf(fc, "}\n");
+        fprintf(fc, "void %s(PS1Context* ctx) { %s_impl(ctx, 0); }\n", fn->name, fn->name);
+        fprintf(fc, "static void %s_mid(PS1Context* ctx) { %s_impl(ctx, 1); }\n\n", fn->name, fn->name);
         fn = fn->next;
     }
 
@@ -369,6 +392,18 @@ bool mips_emit_c_code(const MipsProgram* prog, const EmitterOptions* opts) {
     fn = prog->first_func;
     while (fn) {
         fprintf(fc, "    ps1_register_function(ctx, 0x%08X, %s);\n", fn->entry_pc, fn->name);
+        fn = fn->next;
+    }
+    // Mid-function trampolines: only fill slots not claimed by a real entry point.
+    // Registered per basic block so every covered address has a case in the dispatch switch.
+    fn = prog->first_func;
+    while (fn) {
+        for (MipsBlock* mb = fn->first_block; mb; mb = mb->next) {
+            if (mb->num_insns > 0) {
+                fprintf(fc, "    ps1_register_function_range(ctx, 0x%08X, 0x%08X, %s_mid);\n",
+                        mb->insns[0].pc, mb->insns[mb->num_insns - 1].pc, fn->name);
+            }
+        }
         fn = fn->next;
     }
     fprintf(fc, "    if (ctx->cpu.pc == 0) {\n");

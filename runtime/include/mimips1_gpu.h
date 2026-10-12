@@ -96,8 +96,8 @@ void     ps1_gpu_write_gp0(PS1GPU* gpu, uint32_t val);
 void     ps1_gpu_write_gp1(PS1GPU* gpu, uint32_t val);
 
 // Rasterizer Primitives
-void ps1_gpu_draw_triangle(PS1GPU* gpu, const PS1Vertex* v0, const PS1Vertex* v1, const PS1Vertex* v2, bool textured, bool gouraud, bool semi_trans);
-void ps1_gpu_draw_rect(PS1GPU* gpu, int16_t x, int16_t y, int16_t w, int16_t h, uint8_t r, uint8_t g, uint8_t b, uint8_t u, uint8_t v, bool textured, bool semi_trans);
+void ps1_gpu_draw_triangle(PS1GPU* gpu, const PS1Vertex* v0, const PS1Vertex* v1, const PS1Vertex* v2, bool textured, bool gouraud, bool semi_trans, bool raw_texture);
+void ps1_gpu_draw_rect(PS1GPU* gpu, int16_t x, int16_t y, int16_t w, int16_t h, uint8_t r, uint8_t g, uint8_t b, uint8_t u, uint8_t v, bool textured, bool semi_trans, bool raw_texture);
 void ps1_gpu_draw_line(PS1GPU* gpu, const PS1Vertex* v0, const PS1Vertex* v1, bool gouraud, bool semi_trans);
 void ps1_gpu_clear_vram(PS1GPU* gpu, int16_t x, int16_t y, int16_t w, int16_t h, uint8_t r, uint8_t g, uint8_t b);
 

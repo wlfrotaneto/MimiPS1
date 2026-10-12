@@ -50,8 +50,23 @@ MipsProgram* mips_analyze_program(const PS1Executable* exe) {
             }
         }
         // Standard MIPS stack frame prologue: addiu $sp, $sp, -imm
+        // Only treat as a new function entry point if preceded by a function terminator
+        // (JR $ra / J) or NOP padding. Never split an active function in the middle.
         if (insn.id == MIPS_OP_ADDIU && insn.rs == 29 && insn.rt == 29 && insn.simm < 0) {
-            add_discovered_entry(discovered_entries, &entry_count, cur_pc);
+            bool preceded_by_terminator = (i == 0);
+            if (i >= 2) {
+                MipsInsn prev_branch;
+                mips_decode_instruction(words[i - 2], cur_pc - 8, &prev_branch);
+                if (prev_branch.is_return || prev_branch.id == MIPS_OP_J) {
+                    preceded_by_terminator = true;
+                }
+            }
+            if (i >= 1 && words[i - 1] == 0) {
+                preceded_by_terminator = true; // NOP padding before function
+            }
+            if (preceded_by_terminator) {
+                add_discovered_entry(discovered_entries, &entry_count, cur_pc);
+            }
         }
     }
 

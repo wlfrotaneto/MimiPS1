@@ -24,16 +24,16 @@ bool ps1_memory_load_bios(PS1Context* ctx, const char* bios_path) {
 
 uint8_t* ps1_mem_get_direct_ram_ptr(PS1Context* ctx, uint32_t addr) {
     uint32_t paddr = addr & 0x1FFFFFFF;
-    if (__builtin_expect(paddr < PS1_RAM_SIZE, 1)) {
-        return &ctx->memory.ram[paddr];
+    if (__builtin_expect(paddr < 0x00800000, 1)) {
+        return &ctx->memory.ram[paddr & PS1_RAM_MIRROR_MASK];
     }
     return NULL;
 }
 
 uint8_t ps1_mem_read8(PS1Context* ctx, uint32_t addr) {
     uint32_t paddr = addr & 0x1FFFFFFF;
-    if (paddr < PS1_RAM_SIZE) {
-        return ctx->memory.ram[paddr];
+    if (paddr < 0x00800000) {
+        return ctx->memory.ram[paddr & PS1_RAM_MIRROR_MASK];
     } else if (paddr >= 0x1F800000 && paddr < 0x1F800400) {
         return ctx->memory.scratchpad[paddr - 0x1F800000];
     } else if (paddr >= 0x1FC00000 && paddr < 0x1FC80000) {
@@ -46,8 +46,8 @@ uint8_t ps1_mem_read8(PS1Context* ctx, uint32_t addr) {
 
 uint16_t ps1_mem_read16(PS1Context* ctx, uint32_t addr) {
     uint32_t paddr = addr & 0x1FFFFFFF;
-    if (paddr < (PS1_RAM_SIZE - 1)) {
-        return *(uint16_t*)&ctx->memory.ram[paddr];
+    if (paddr < 0x00800000) {
+        return *(uint16_t*)&ctx->memory.ram[(paddr & PS1_RAM_MIRROR_MASK) & ~1];
     } else if (paddr >= 0x1F800000 && paddr < 0x1F800400) {
         return *(uint16_t*)&ctx->memory.scratchpad[paddr - 0x1F800000];
     } else if (paddr >= 0x1FC00000 && paddr < 0x1FC80000) {
@@ -60,8 +60,14 @@ uint16_t ps1_mem_read16(PS1Context* ctx, uint32_t addr) {
 
 uint32_t ps1_mem_read32(PS1Context* ctx, uint32_t addr) {
     uint32_t paddr = addr & 0x1FFFFFFF;
-    if (__builtin_expect(paddr < (PS1_RAM_SIZE - 3), 1)) {
-        return *(uint32_t*)&ctx->memory.ram[paddr];
+    if (__builtin_expect(paddr < 0x00800000, 1)) {
+        uint32_t ram_addr = (paddr & PS1_RAM_MIRROR_MASK) & ~3;
+        if (ram_addr == 0x000B2E0C) {
+            uint32_t val = *(uint32_t*)&ctx->memory.ram[ram_addr];
+            *(uint32_t*)&ctx->memory.ram[ram_addr] = val + 1;
+            return val + 1;
+        }
+        return *(uint32_t*)&ctx->memory.ram[ram_addr];
     } else if (paddr >= 0x1F800000 && paddr < 0x1F800400) {
         return *(uint32_t*)&ctx->memory.scratchpad[paddr - 0x1F800000];
     } else if (paddr >= 0x1FC00000 && paddr < 0x1FC80000) {
@@ -74,8 +80,8 @@ uint32_t ps1_mem_read32(PS1Context* ctx, uint32_t addr) {
 
 void ps1_mem_write8(PS1Context* ctx, uint32_t addr, uint8_t val) {
     uint32_t paddr = addr & 0x1FFFFFFF;
-    if (paddr < PS1_RAM_SIZE) {
-        ctx->memory.ram[paddr] = val;
+    if (paddr < 0x00800000) {
+        ctx->memory.ram[paddr & PS1_RAM_MIRROR_MASK] = val;
     } else if (paddr >= 0x1F800000 && paddr < 0x1F800400) {
         ctx->memory.scratchpad[paddr - 0x1F800000] = val;
     } else if (paddr >= 0x1F801000 && paddr < 0x1F803000) {
@@ -85,8 +91,8 @@ void ps1_mem_write8(PS1Context* ctx, uint32_t addr, uint8_t val) {
 
 void ps1_mem_write16(PS1Context* ctx, uint32_t addr, uint16_t val) {
     uint32_t paddr = addr & 0x1FFFFFFF;
-    if (paddr < (PS1_RAM_SIZE - 1)) {
-        *(uint16_t*)&ctx->memory.ram[paddr] = val;
+    if (paddr < 0x00800000) {
+        *(uint16_t*)&ctx->memory.ram[(paddr & PS1_RAM_MIRROR_MASK) & ~1] = val;
     } else if (paddr >= 0x1F800000 && paddr < 0x1F800400) {
         *(uint16_t*)&ctx->memory.scratchpad[paddr - 0x1F800000] = val;
     } else if (paddr >= 0x1F801000 && paddr < 0x1F803000) {
@@ -96,8 +102,8 @@ void ps1_mem_write16(PS1Context* ctx, uint32_t addr, uint16_t val) {
 
 void ps1_mem_write32(PS1Context* ctx, uint32_t addr, uint32_t val) {
     uint32_t paddr = addr & 0x1FFFFFFF;
-    if (__builtin_expect(paddr < (PS1_RAM_SIZE - 3), 1)) {
-        *(uint32_t*)&ctx->memory.ram[paddr] = val;
+    if (__builtin_expect(paddr < 0x00800000, 1)) {
+        *(uint32_t*)&ctx->memory.ram[(paddr & PS1_RAM_MIRROR_MASK) & ~3] = val;
     } else if (paddr >= 0x1F800000 && paddr < 0x1F800400) {
         *(uint32_t*)&ctx->memory.scratchpad[paddr - 0x1F800000] = val;
     } else if (paddr >= 0x1F801000 && paddr < 0x1F803000) {

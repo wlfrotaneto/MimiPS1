@@ -165,7 +165,7 @@ uint16_t ps1_gpu_sample_texture(PS1GPU* gpu, int u, int v) {
 }
 
 // Barycentric triangle rasterizer
-void ps1_gpu_draw_triangle(PS1GPU* gpu, const PS1Vertex* v0, const PS1Vertex* v1, const PS1Vertex* v2, bool textured, bool gouraud, bool semi_trans) {
+void ps1_gpu_draw_triangle(PS1GPU* gpu, const PS1Vertex* v0, const PS1Vertex* v1, const PS1Vertex* v2, bool textured, bool gouraud, bool semi_trans, bool raw_texture) {
     int min_x = MIN(v0->x, MIN(v1->x, v2->x));
     int max_x = MAX(v0->x, MAX(v1->x, v2->x));
     int min_y = MIN(v0->y, MIN(v1->y, v2->y));
@@ -199,6 +199,7 @@ void ps1_gpu_draw_triangle(PS1GPU* gpu, const PS1Vertex* v0, const PS1Vertex* v1
                     b = (uint8_t)(v0->b * fw0 + v1->b * fw1 + v2->b * fw2);
                 }
 
+                bool is_semi = semi_trans;
                 if (textured) {
                     float fw0 = (float)w0 / area;
                     float fw1 = (float)w1 / area;
@@ -210,12 +211,19 @@ void ps1_gpu_draw_triangle(PS1GPU* gpu, const PS1Vertex* v0, const PS1Vertex* v1
 
                     uint8_t tr, tg, tb;
                     ps1_color_to_rgb(tex_c, &tr, &tg, &tb);
-                    r = (uint8_t)((r * tr) >> 7);
-                    g = (uint8_t)((g * tg) >> 7);
-                    b = (uint8_t)((b * tb) >> 7);
+                    if (!raw_texture && (r != 0 || g != 0 || b != 0)) {
+                        r = (uint8_t)((r * tr) >> 7);
+                        g = (uint8_t)((g * tg) >> 7);
+                        b = (uint8_t)((b * tb) >> 7);
+                    } else {
+                        r = tr;
+                        g = tg;
+                        b = tb;
+                    }
+                    is_semi = semi_trans && ((tex_c & 0x8000) != 0);
                 }
 
-                blend_pixel(gpu, &gpu->vram[y % 512][x % 1024], r, g, b, semi_trans);
+                blend_pixel(gpu, &gpu->vram[y % 512][x % 1024], r, g, b, is_semi);
             }
         }
     }
@@ -235,7 +243,7 @@ void ps1_gpu_clear_vram(PS1GPU* gpu, int16_t x, int16_t y, int16_t w, int16_t h,
     }
 }
 
-void ps1_gpu_draw_rect(PS1GPU* gpu, int16_t x, int16_t y, int16_t w, int16_t h, uint8_t r, uint8_t g, uint8_t b, uint8_t u, uint8_t v, bool textured, bool semi_trans) {
+void ps1_gpu_draw_rect(PS1GPU* gpu, int16_t x, int16_t y, int16_t w, int16_t h, uint8_t r, uint8_t g, uint8_t b, uint8_t u, uint8_t v, bool textured, bool semi_trans, bool raw_texture) {
     int x1 = MAX(x + gpu->draw_offset_x, gpu->clip_x1);
     int y1 = MAX(y + gpu->draw_offset_y, gpu->clip_y1);
     int x2 = MIN(x + gpu->draw_offset_x + w, gpu->clip_x2);
@@ -244,6 +252,7 @@ void ps1_gpu_draw_rect(PS1GPU* gpu, int16_t x, int16_t y, int16_t w, int16_t h, 
     for (int cy = y1; cy < y2; cy++) {
         for (int cx = x1; cx < x2; cx++) {
             uint8_t pr = r, pg = g, pb = b;
+            bool is_semi = semi_trans;
             if (textured) {
                 int cur_u = u + (cx - (x + gpu->draw_offset_x));
                 int cur_v = v + (cy - (y + gpu->draw_offset_y));
@@ -251,11 +260,18 @@ void ps1_gpu_draw_rect(PS1GPU* gpu, int16_t x, int16_t y, int16_t w, int16_t h, 
                 if (tex == 0) continue;
                 uint8_t tr, tg, tb;
                 ps1_color_to_rgb(tex, &tr, &tg, &tb);
-                pr = (uint8_t)((pr * tr) >> 7);
-                pg = (uint8_t)((pg * tg) >> 7);
-                pb = (uint8_t)((pb * tb) >> 7);
+                if (!raw_texture && (r != 0 || g != 0 || b != 0)) {
+                    pr = (uint8_t)((pr * tr) >> 7);
+                    pg = (uint8_t)((pg * tg) >> 7);
+                    pb = (uint8_t)((pb * tb) >> 7);
+                } else {
+                    pr = tr;
+                    pg = tg;
+                    pb = tb;
+                }
+                is_semi = semi_trans && ((tex & 0x8000) != 0);
             }
-            blend_pixel(gpu, &gpu->vram[cy % 512][cx % 1024], pr, pg, pb, semi_trans);
+            blend_pixel(gpu, &gpu->vram[cy % 512][cx % 1024], pr, pg, pb, is_semi);
         }
     }
 }
@@ -349,9 +365,10 @@ static void execute_gp0_packet(PS1GPU* gpu) {
             }
         }
 
-        ps1_gpu_draw_triangle(gpu, &v[0], &v[1], &v[2], is_textured, is_gouraud, semi_trans);
+        bool raw_texture = (op & 1) != 0;
+        ps1_gpu_draw_triangle(gpu, &v[0], &v[1], &v[2], is_textured, is_gouraud, semi_trans, raw_texture);
         if (is_quad) {
-            ps1_gpu_draw_triangle(gpu, &v[1], &v[2], &v[3], is_textured, is_gouraud, semi_trans);
+            ps1_gpu_draw_triangle(gpu, &v[1], &v[2], &v[3], is_textured, is_gouraud, semi_trans, raw_texture);
         }
         return;
     }
@@ -416,7 +433,8 @@ static void execute_gp0_packet(PS1GPU* gpu) {
             h = (int16_t)(gpu->gp0_fifo[idx] >> 16);
         }
 
-        ps1_gpu_draw_rect(gpu, x, y, w, h, r, g, b, u, v, is_textured, semi_trans);
+        bool raw_texture = (op & 1) != 0;
+        ps1_gpu_draw_rect(gpu, x, y, w, h, r, g, b, u, v, is_textured, semi_trans, raw_texture);
         return;
     }
 
@@ -474,6 +492,7 @@ static void execute_gp0_packet(PS1GPU* gpu) {
         uint32_t val = gpu->gp0_fifo[0];
         gpu->clip_x1 = (int16_t)(val & 0x3FF);
         gpu->clip_y1 = (int16_t)((val >> 10) & 0x1FF);
+        printf("[GPU] E3 Set Clip Top-Left: (%d, %d)\n", gpu->clip_x1, gpu->clip_y1);
         return;
     }
 
@@ -482,6 +501,7 @@ static void execute_gp0_packet(PS1GPU* gpu) {
         uint32_t val = gpu->gp0_fifo[0];
         gpu->clip_x2 = (int16_t)(val & 0x3FF);
         gpu->clip_y2 = (int16_t)((val >> 10) & 0x1FF);
+        printf("[GPU] E4 Set Clip Bottom-Right: (%d, %d)\n", gpu->clip_x2, gpu->clip_y2);
         return;
     }
 
@@ -515,6 +535,10 @@ void ps1_gpu_write_gp0(PS1GPU* gpu, uint32_t val) {
         if (gpu->transfer.cur_x >= (gpu->transfer.x + gpu->transfer.w)) {
             gpu->transfer.cur_x = gpu->transfer.x;
             gpu->transfer.cur_y++;
+            if (gpu->transfer.cur_y >= (gpu->transfer.y + gpu->transfer.h)) {
+                gpu->transfer.active = false;
+                return;
+            }
         }
         
         gpu->vram[gpu->transfer.cur_y % 512][gpu->transfer.cur_x % 1024] = p1;
@@ -534,8 +558,10 @@ void ps1_gpu_write_gp0(PS1GPU* gpu, uint32_t val) {
         gpu->gp0_words_needed = get_gp0_cmd_len(val);
     }
 
-    gpu->gp0_fifo[gpu->gp0_fifo_len++] = val;
-    if (gpu->gp0_fifo_len >= gpu->gp0_words_needed) {
+    if (gpu->gp0_fifo_len < 64) {
+        gpu->gp0_fifo[gpu->gp0_fifo_len++] = val;
+    }
+    if (gpu->gp0_fifo_len >= gpu->gp0_words_needed || gpu->gp0_fifo_len >= 64) {
         execute_gp0_packet(gpu);
         gpu->gp0_fifo_len = 0;
     }
