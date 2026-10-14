@@ -92,6 +92,13 @@ void        ps1_trigger_irq(PS1Context* ctx, uint32_t irq_bit);
 // Advance CPU and hardware subsystem cycles deterministically
 void        ps1_cpu_tick(PS1Context* ctx, uint32_t cycles);
 
+#if defined(__APPLE__)
+bool        macos_audio_init(PS1Context* ctx);
+void        macos_audio_shutdown(void);
+void        macos_audio_tick(PS1Context* ctx, uint32_t delta_cycles);
+uint64_t    macos_audio_get_underruns(void);
+#endif
+
 // Convenience macros for generated recompiled C code
 #define R(reg)          (ctx->cpu.r[reg])
 #define PC              (ctx->cpu.pc)

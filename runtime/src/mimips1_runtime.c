@@ -235,6 +235,10 @@ void ps1_cpu_tick(PS1Context* ctx, uint32_t cycles) {
         ps1_timers_tick(ctx, (uint32_t)delta);
         ps1_cdrom_tick(ctx, (uint32_t)delta);
 
+#if defined(__APPLE__)
+        macos_audio_tick(ctx, (uint32_t)delta);
+#endif
+
         // Trigger V-Blank when frame period completes (~565,045 cycles at 59.94 Hz NTSC)
         while (ctx->cycle_counter >= ctx->next_vblank_cycle) {
             ctx->next_vblank_cycle += (uint64_t)(PS1_CPU_CLOCK_HZ / 59.94);
