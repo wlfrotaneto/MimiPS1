@@ -56,6 +56,25 @@ def extract_boot_executable(file_path, output_dir):
         return file_path
 
     ext = os.path.splitext(file_path)[1].lower()
+    if ext == '.cue':
+        cue_dir = os.path.dirname(file_path)
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as cf:
+            for line in cf:
+                if "FILE" in line.upper():
+                    parts = line.split('"')
+                    if len(parts) >= 2:
+                        bin_candidate = os.path.join(cue_dir, parts[1])
+                        if os.path.isfile(bin_candidate):
+                            file_path = bin_candidate
+                            break
+                        # Also check if same dir has single .bin
+                        for f in os.listdir(cue_dir):
+                            if f.lower().endswith('.bin'):
+                                file_path = os.path.join(cue_dir, f)
+                                break
+                    break
+        ext = os.path.splitext(file_path)[1].lower()
+
     if ext not in ['.iso', '.bin', '.img']:
         return file_path
 
@@ -111,7 +130,7 @@ def extract_boot_executable(file_path, output_dir):
                         parts = line.split("=")
                         if len(parts) > 1:
                             target_exe = parts[1].strip()
-                            target_exe = target_exe.replace("cdrom:\\", "").replace("cdrom:/", "").split(";")[0].strip().upper()
+                            target_exe = target_exe.replace("cdrom:\\", "").replace("cdrom:/", "").replace("cdrom:", "").replace("CDROM:\\", "").replace("CDROM:/", "").replace("CDROM:", "").split(";")[0].strip().upper()
                             break
 
             if not target_exe:
