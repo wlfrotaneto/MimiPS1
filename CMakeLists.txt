@@ -70,3 +70,9 @@ add_custom_target(dmg
     DEPENDS app_bundle
     COMMENT "Packaging MimiPS1 Apple Silicon DMG installer..."
 )
+
+# 6. GTE Hardware Accuracy Test Suite
+add_executable(gte_test
+    tests/gte_test.c
+)
+target_link_libraries(gte_test PRIVATE mimips1-runtime)
