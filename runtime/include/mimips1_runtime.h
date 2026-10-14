@@ -55,12 +55,22 @@ struct PS1Context {
     uint64_t    cycle_counter;
     uint32_t    cycles_since_vblank;
     bool        in_tick;
+    uint64_t    start_time_ns;
+    uint64_t    next_vblank_cycle;
 
     // Video display / presentation options
     int         aspect_ratio; // 0 = 4:3 (original), 1 = 16:9, 2 = Stretch
     bool        crt_scanlines;
     bool        linear_filtering;
 };
+
+// Global log level and logging macro
+extern int g_mimips1_log_level;
+int ps1_get_log_level(void);
+#define PS1_LOG(level, ...) do { \
+    if (g_mimips1_log_level < 0) g_mimips1_log_level = ps1_get_log_level(); \
+    if (g_mimips1_log_level >= (level)) { printf(__VA_ARGS__); } \
+} while(0)
 
 PS1Context* ps1_runtime_create(void);
 void        ps1_runtime_destroy(PS1Context* ctx);

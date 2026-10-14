@@ -62,7 +62,7 @@ static void push_response(PS1CDROM* cdrom, uint8_t val) {
 
 static void handle_cdrom_command(PS1Context* ctx, uint8_t cmd) {
     PS1CDROM* cd = &ctx->cdrom;
-    printf("[CDROM] Command 0x%02X (params=%d)\n", cmd, cd->param_count);
+    PS1_LOG(2, "[CDROM] Command 0x%02X (params=%d)\n", cmd, cd->param_count);
     cd->response_count = 0;
     cd->response_read_pos = 0;
 
@@ -82,7 +82,7 @@ static void handle_cdrom_command(PS1Context* ctx, uint8_t cmd) {
                 uint32_t f = ((cd->target_f >> 4) * 10) + (cd->target_f & 0xF);
                 cd->current_lba = (m * 60 * 75) + (s * 75) + f;
                 if (cd->current_lba >= 150) cd->current_lba -= 150; // 2-second pregap
-                printf("[CDROM] Setloc %02X:%02X:%02X (%u:%u:%u) -> LBA %u\n",
+                PS1_LOG(2, "[CDROM] Setloc %02X:%02X:%02X (%u:%u:%u) -> LBA %u\n",
                        cd->target_m, cd->target_s, cd->target_f, m, s, f, cd->current_lba);
             }
             push_response(cd, cd->status);
@@ -102,7 +102,7 @@ static void handle_cdrom_command(PS1Context* ctx, uint8_t cmd) {
             cd->status |= CD_STAT_READ_BIT;
             cd->reading = true;
             cd->read_cycles = 0;
-            printf("[CDROM] ReadN started at LBA %u (mode=0x%02X)\n", cd->current_lba, cd->mode);
+            PS1_LOG(2, "[CDROM] ReadN started at LBA %u (mode=0x%02X)\n", cd->current_lba, cd->mode);
             push_response(cd, cd->status);
             cd->irq_flag = 3;
             break;
@@ -121,7 +121,7 @@ static void handle_cdrom_command(PS1Context* ctx, uint8_t cmd) {
             cd->playing = false;
             cd->read_cycles = 0;
             cd->status &= ~(CD_STAT_READ_BIT | CD_STAT_PLAY_BIT);
-            printf("[CDROM] Pause at LBA %u\n", cd->current_lba);
+            PS1_LOG(2, "[CDROM] Pause at LBA %u\n", cd->current_lba);
             push_response(cd, cd->status);
             cd->irq_flag = 3;
             cd->pending_int2 = true;
@@ -236,7 +236,7 @@ void ps1_cdrom_tick(PS1Context* ctx, uint32_t cycles) {
                 cd->response_read_pos = 0;
                 push_response(cd, cd->status);
                 cd->irq_flag = 1; // Sector data ready IRQ (INT1)
-                printf("[CDROM] Sector Delivered: LBA %u (avail=%d, mode=0x%02X)\n", cd->current_lba - 1, cd->data_bytes_avail, cd->mode);
+                PS1_LOG(2, "[CDROM] Sector Delivered: LBA %u (avail=%d, mode=0x%02X)\n", cd->current_lba - 1, cd->data_bytes_avail, cd->mode);
                 ps1_trigger_irq(ctx, IRQ_CDROM);
             }
         }
@@ -273,9 +273,9 @@ uint8_t ps1_cdrom_read(PS1Context* ctx, uint32_t addr) {
     // Only log if not repetitive status polling
     static int poll_count = 0;
     if (reg == 0 && ret == (cd->reg_index | (1<<3) | (1<<4))) {
-        if (++poll_count <= 2) printf("[CD-R] reg=0 (poll)\n");
+        if (++poll_count <= 2) PS1_LOG(2, "[CD-R] reg=0 (poll)\n");
     } else {
-        printf("[CD-R] reg=%d (idx=%d) -> 0x%02X\n", reg, cd->reg_index, ret);
+        PS1_LOG(2, "[CD-R] reg=%d (idx=%d) -> 0x%02X\n", reg, cd->reg_index, ret);
         poll_count = 0;
     }
     return ret;
@@ -284,7 +284,7 @@ uint8_t ps1_cdrom_read(PS1Context* ctx, uint32_t addr) {
 void ps1_cdrom_write(PS1Context* ctx, uint32_t addr, uint8_t val) {
     PS1CDROM* cd = &ctx->cdrom;
     uint32_t reg = addr & 3;
-    printf("[CD-W] reg=%d val=0x%02X (idx=%d)\n", reg, val, cd->reg_index);
+    PS1_LOG(2, "[CD-W] reg=%d val=0x%02X (idx=%d)\n", reg, val, cd->reg_index);
 
     switch (reg) {
         case 0:
@@ -293,7 +293,7 @@ void ps1_cdrom_write(PS1Context* ctx, uint32_t addr, uint8_t val) {
         case 1:
             if (cd->reg_index == 0) {
                 if (val == 0x02) {
-                    printf("[CDROM Setloc Caller] PC=0x%08X, RA=0x%08X, SP=0x%08X, A0=0x%08X, A1=0x%08X\n",
+                    PS1_LOG(2, "[CDROM Setloc Caller] PC=0x%08X, RA=0x%08X, SP=0x%08X, A0=0x%08X, A1=0x%08X\n",
                            ctx->cpu.pc, ctx->cpu.r[31], ctx->cpu.r[29], ctx->cpu.r[4], ctx->cpu.r[5]);
                 }
                 handle_cdrom_command(ctx, val);

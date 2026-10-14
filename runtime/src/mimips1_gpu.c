@@ -1,4 +1,5 @@
 #include "mimips1_gpu.h"
+#include "mimips1_runtime.h"
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -317,7 +318,7 @@ static void execute_gp0_packet(PS1GPU* gpu) {
         int16_t w = (int16_t)(gpu->gp0_fifo[2] & 0xFFFF);
         int16_t h = (int16_t)(gpu->gp0_fifo[2] >> 16);
         ps1_gpu_clear_vram(gpu, x, y, w, h, r, g, b);
-        printf("[GPU 02] Clear VRAM: (%d, %d)-(%dx%d) color=(%d,%d,%d)\n", x, y, w, h, r, g, b);
+        PS1_LOG(2, "[GPU 02] Clear VRAM: (%d, %d)-(%dx%d) color=(%d,%d,%d)\n", x, y, w, h, r, g, b);
         return;
     }
 
@@ -499,7 +500,7 @@ static void execute_gp0_packet(PS1GPU* gpu) {
         uint32_t val = gpu->gp0_fifo[0];
         gpu->clip_x1 = (int16_t)(val & 0x3FF);
         gpu->clip_y1 = (int16_t)((val >> 10) & 0x1FF);
-        printf("[GPU] E3 Set Clip Top-Left: (%d, %d)\n", gpu->clip_x1, gpu->clip_y1);
+        PS1_LOG(2, "[GPU] E3 Set Clip Top-Left: (%d, %d)\n", gpu->clip_x1, gpu->clip_y1);
         return;
     }
 
@@ -508,7 +509,7 @@ static void execute_gp0_packet(PS1GPU* gpu) {
         uint32_t val = gpu->gp0_fifo[0];
         gpu->clip_x2 = (int16_t)(val & 0x3FF);
         gpu->clip_y2 = (int16_t)((val >> 10) & 0x1FF);
-        printf("[GPU] E4 Set Clip Bottom-Right: (%d, %d)\n", gpu->clip_x2, gpu->clip_y2);
+        PS1_LOG(2, "[GPU] E4 Set Clip Bottom-Right: (%d, %d)\n", gpu->clip_x2, gpu->clip_y2);
         return;
     }
 

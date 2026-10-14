@@ -68,7 +68,7 @@ void ps1_dma_write(PS1Context* ctx, uint32_t addr, uint32_t val) {
 void ps1_dma_execute(PS1Context* ctx, int channel_idx) {
     DMAChannel* ch = &ctx->dma.channels[channel_idx];
     uint32_t sync_mode = (ch->chcr >> 9) & 0x03;
-    printf("[DMA] execute ch=%d sync=%u madr=0x%08X bcr=0x%08X chcr=0x%08X\n", channel_idx, sync_mode, ch->madr, ch->bcr, ch->chcr);
+    PS1_LOG(2, "[DMA] execute ch=%d sync=%u madr=0x%08X bcr=0x%08X chcr=0x%08X\n", channel_idx, sync_mode, ch->madr, ch->bcr, ch->chcr);
 
     // GPU DMA Channel (2)
     if (channel_idx == DMA_GPU) {
@@ -138,14 +138,14 @@ void ps1_dma_execute(PS1Context* ctx, int channel_idx) {
         }
         uint32_t count = (ch->bcr & 0xFFFF) * (ch->bcr >> 16 ? (ch->bcr >> 16) : 1);
         uint32_t addr = ch->madr & 0x1FFFFC;
-        printf("[DMA3] madr=0x%08X count=%u avail=%d pos=%d\n", addr, count, ctx->cdrom.data_bytes_avail, ctx->cdrom.data_read_pos);
+        PS1_LOG(2, "[DMA3] madr=0x%08X count=%u avail=%d pos=%d\n", addr, count, ctx->cdrom.data_bytes_avail, ctx->cdrom.data_read_pos);
         for (uint32_t i = 0; i < count && addr < PS1_RAM_SIZE; i++) {
             if (ctx->cdrom.data_bytes_avail >= 4) {
                 uint32_t w = *(uint32_t*)&ctx->cdrom.data_fifo[ctx->cdrom.data_read_pos];
                 ctx->cdrom.data_read_pos += 4;
                 ctx->cdrom.data_bytes_avail -= 4;
                 *(uint32_t*)&ctx->memory.ram[addr] = w;
-                if (i == 0) printf("[DMA3 First Word] 0x%08X\n", w);
+                if (i == 0) PS1_LOG(2, "[DMA3 First Word] 0x%08X\n", w);
             }
             addr += 4;
         }

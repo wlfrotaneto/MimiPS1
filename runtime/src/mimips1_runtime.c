@@ -3,7 +3,18 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/time.h>
+#include <time.h>
 #include <unistd.h>
+
+int g_mimips1_log_level = -1;
+
+int ps1_get_log_level(void) {
+    const char* env = getenv("MIMIPS1_LOG");
+    if (env) {
+        return atoi(env);
+    }
+    return 0;
+}
 
 PS1Context* ps1_runtime_create(void) {
     PS1Context* ctx = (PS1Context*)calloc(1, sizeof(PS1Context));
@@ -24,6 +35,7 @@ PS1Context* ps1_runtime_create(void) {
 
     ctx->running = true;
     ctx->aspect_ratio = 0; // 4:3
+    ctx->next_vblank_cycle = (uint64_t)(PS1_CPU_CLOCK_HZ / 59.94);
     return ctx;
 }
 
@@ -51,6 +63,10 @@ void ps1_runtime_reset(PS1Context* ctx) {
     ctx->irq_stat = 0;
     ctx->irq_mask = 0;
     ctx->frame_count = 0;
+    ctx->cycle_counter = 0;
+    ctx->cycles_since_vblank = 0;
+    ctx->start_time_ns = 0;
+    ctx->next_vblank_cycle = (uint64_t)(PS1_CPU_CLOCK_HZ / 59.94);
 }
 
 bool ps1_runtime_load_exe(PS1Context* ctx, const char* exe_path) {
@@ -162,8 +178,6 @@ void ps1_trigger_irq(PS1Context* ctx, uint32_t irq_bit) {
         ps1_bios_deliver_event(ctx, 0xF2000001, 0x0004);
         ps1_bios_deliver_event(ctx, 0xF4000001, 0x0001);
         ps1_bios_deliver_event(ctx, 0xF0000002, 0x0001); // RCnt 1 (H-Blank / V-Sync)
-        ps1_bios_deliver_event(ctx, 0xF2000002, 0x0001);
-        ps1_bios_deliver_event(ctx, 0xF2000002, 0x0002);
     }
     if (irq_bit & IRQ_TIMER0) {
         ps1_bios_deliver_event(ctx, 0xF2000000, 0x0001);
@@ -193,36 +207,39 @@ void ps1_trigger_irq(PS1Context* ctx, uint32_t irq_bit) {
 }
 
 void ps1_cpu_tick(PS1Context* ctx, uint32_t cycles) {
+    (void)cycles;
     if (!ctx || ctx->in_tick) return;
     ctx->in_tick = true;
 
-    ctx->cycle_counter += cycles;
-    ctx->cycles_since_vblank += cycles;
+    uint64_t now_ns = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+    if (ctx->start_time_ns == 0) {
+        ctx->start_time_ns = now_ns;
+        ctx->next_vblank_cycle = (uint64_t)(PS1_CPU_CLOCK_HZ / 59.94);
+    }
 
-    // Tick hardware timers and CD-ROM
-    ps1_timers_tick(ctx, cycles);
-    ps1_cdrom_tick(ctx, cycles);
-
-    // Trigger V-Blank when frame period completes (~564,480 cycles = ~1/60th sec)
-    if (ctx->cycles_since_vblank >= PS1_CYCLES_PER_FRAME) {
-        ctx->cycles_since_vblank -= PS1_CYCLES_PER_FRAME;
-        ctx->frame_count++;
-        ctx->gpu.interlace_field = !ctx->gpu.interlace_field;
-
-        ps1_trigger_irq(ctx, IRQ_VBLANK);
-
-        // Throttle to authentic ~60 FPS
-        static struct timeval last_frame_tv = {0, 0};
-        struct timeval now_tv;
-        gettimeofday(&now_tv, NULL);
-        if (last_frame_tv.tv_sec != 0) {
-            long elapsed_us = (now_tv.tv_sec - last_frame_tv.tv_sec) * 1000000 + (now_tv.tv_usec - last_frame_tv.tv_usec);
-            if (elapsed_us > 0 && elapsed_us < 16666) {
-                usleep((useconds_t)(16666 - elapsed_us));
-                gettimeofday(&now_tv, NULL);
-            }
+    uint64_t target_cycles = (now_ns - ctx->start_time_ns) * PS1_CPU_CLOCK_HZ / 1000000000ULL;
+    if (target_cycles > ctx->cycle_counter) {
+        uint64_t delta = target_cycles - ctx->cycle_counter;
+        const uint64_t MAX_DELTA = PS1_CYCLES_PER_FRAME * 2;
+        if (delta > MAX_DELTA) {
+            ctx->start_time_ns = now_ns - (ctx->cycle_counter + MAX_DELTA) * 1000000000ULL / PS1_CPU_CLOCK_HZ;
+            delta = MAX_DELTA;
         }
-        last_frame_tv = now_tv;
+
+        ctx->cycle_counter += delta;
+
+        // Tick hardware timers and CD-ROM
+        ps1_timers_tick(ctx, (uint32_t)delta);
+        ps1_cdrom_tick(ctx, (uint32_t)delta);
+
+        // Trigger V-Blank when frame period completes (~565,045 cycles at 59.94 Hz NTSC)
+        while (ctx->cycle_counter >= ctx->next_vblank_cycle) {
+            ctx->next_vblank_cycle += (uint64_t)(PS1_CPU_CLOCK_HZ / 59.94);
+            ctx->frame_count++;
+            ctx->gpu.interlace_field = !ctx->gpu.interlace_field;
+
+            ps1_trigger_irq(ctx, IRQ_VBLANK);
+        }
     }
 
     ctx->in_tick = false;

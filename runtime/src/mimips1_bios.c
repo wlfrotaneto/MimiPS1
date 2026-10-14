@@ -256,7 +256,7 @@ static void ps1_bios_vprintf(PS1Context* ctx, const char* fmt) {
 bool ps1_bios_handle_a0(PS1Context* ctx, uint32_t func) {
     uint32_t* r = ctx->cpu.r;
     if (func != 0x2A && func != 0x27 && func != 0x28 && func != 0x29 && func != 0x2B && func != 0x2C && func != 0x2D) {
-        printf("[BIOS A0] func=0x%02X, a0=0x%08X, a1=0x%08X, a2=0x%08X, ra=0x%08X\n", func, r[4], r[5], r[6], r[31]);
+        PS1_LOG(2, "[BIOS A0] func=0x%02X, a0=0x%08X, a1=0x%08X, a2=0x%08X, ra=0x%08X\n", func, r[4], r[5], r[6], r[31]);
     }
 
     switch (func) {
@@ -478,7 +478,7 @@ void ps1_bios_deliver_event(PS1Context* ctx, uint32_t class_id, uint32_t spec) {
 bool ps1_bios_handle_b0(PS1Context* ctx, uint32_t func) {
     uint32_t* r = ctx->cpu.r;
     if (func != 0x3D && func != 0x16) {
-        printf("[BIOS B0] 0x%02X (a0=0x%08X, a1=0x%08X, ra=0x%08X)\n", func, r[4], r[5], r[31]);
+        PS1_LOG(2, "[BIOS B0] 0x%02X (a0=0x%08X, a1=0x%08X, ra=0x%08X)\n", func, r[4], r[5], r[31]);
     }
 
     switch (func) {
