@@ -221,10 +221,13 @@ void ps1_cdrom_tick(PS1Context* ctx, uint32_t cycles) {
         if (cd->read_cycles >= sector_period) {
             cd->read_cycles -= sector_period;
 
-            // Read sector
-            long offset = (long)cd->current_lba * cd->sector_size + cd->data_offset;
+            // Read sector (support subheader mode 0x20)
+            bool subheader_mode = (cd->mode & 0x20) != 0;
+            uint32_t sec_offset = (cd->is_raw ? (subheader_mode ? 12 : 24) : 0);
+            uint32_t sec_size = subheader_mode ? (2048 + (cd->is_raw ? 12 : 0)) : CDROM_SECTOR_SIZE_DATA;
+            long offset = (long)cd->current_lba * cd->sector_size + sec_offset;
             fseek(cd->image_file, offset, SEEK_SET);
-            size_t r = fread(cd->data_fifo, 1, CDROM_SECTOR_SIZE_DATA, cd->image_file);
+            size_t r = fread(cd->data_fifo, 1, sec_size, cd->image_file);
             if (r > 0) {
                 cd->data_bytes_avail = (int)r;
                 cd->data_read_pos = 0;
@@ -233,7 +236,7 @@ void ps1_cdrom_tick(PS1Context* ctx, uint32_t cycles) {
                 cd->response_read_pos = 0;
                 push_response(cd, cd->status);
                 cd->irq_flag = 1; // Sector data ready IRQ (INT1)
-                printf("[CDROM] Sector Delivered: LBA %u (avail=%d)\n", cd->current_lba - 1, cd->data_bytes_avail);
+                printf("[CDROM] Sector Delivered: LBA %u (avail=%d, mode=0x%02X)\n", cd->current_lba - 1, cd->data_bytes_avail, cd->mode);
                 ps1_trigger_irq(ctx, IRQ_CDROM);
             }
         }
@@ -309,6 +312,10 @@ void ps1_cdrom_write(PS1Context* ctx, uint32_t addr, uint8_t val) {
         case 3:
             if (cd->reg_index == 0) {
                 // Request register (0x1F801803.0)
+                if ((val & 0x80) && cd->data_bytes_avail == 0) {
+                    cd->data_read_pos = 0;
+                    cd->data_bytes_avail = (cd->mode & 0x20) ? (2048 + (cd->is_raw ? 12 : 0)) : CDROM_SECTOR_SIZE_DATA;
+                }
             } else if (cd->reg_index == 1) {
                 // Acknowledge IRQ bits (0x1F801803.1)
                 cd->irq_flag &= ~(val & 0x1F);
