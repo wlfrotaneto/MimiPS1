@@ -94,11 +94,15 @@ void ps1_spu_write(PS1SPU* spu, uint32_t addr, uint16_t val) {
         for (int i = 0; i < 16; i++) {
             if (val & (1 << i)) {
                 spu->voices[i].current_addr = spu->voices[i].start_addr;
+                spu->voices[i].loop_addr = spu->voices[i].start_addr;
+                spu->voices[i].sample_in_block = 0;
+                spu->voices[i].sample_counter = 0;
                 spu->voices[i].adsr_phase = ADSR_PHASE_ATTACK;
                 spu->voices[i].adsr_level = 0;
                 spu->voices[i].active = true;
                 spu->voices[i].prev1 = 0;
                 spu->voices[i].prev2 = 0;
+                spu->voices[i].current_decoded_sample = 0;
             }
         }
     } else if (offset == 0x18A) {
@@ -106,11 +110,15 @@ void ps1_spu_write(PS1SPU* spu, uint32_t addr, uint16_t val) {
         for (int i = 0; i < 8; i++) {
             if (val & (1 << i)) {
                 spu->voices[16 + i].current_addr = spu->voices[16 + i].start_addr;
+                spu->voices[16 + i].loop_addr = spu->voices[16 + i].start_addr;
+                spu->voices[16 + i].sample_in_block = 0;
+                spu->voices[16 + i].sample_counter = 0;
                 spu->voices[16 + i].adsr_phase = ADSR_PHASE_ATTACK;
                 spu->voices[16 + i].adsr_level = 0;
                 spu->voices[16 + i].active = true;
                 spu->voices[16 + i].prev1 = 0;
                 spu->voices[16 + i].prev2 = 0;
+                spu->voices[16 + i].current_decoded_sample = 0;
             }
         }
     } else if (offset == 0x18C) {
@@ -147,7 +155,11 @@ void ps1_spu_write(PS1SPU* spu, uint32_t addr, uint16_t val) {
 
 static int16_t decode_adpcm_sample(SPUVoice* voice, uint8_t nibble, uint8_t shift, uint8_t filter) {
     int32_t sample = (int8_t)(nibble << 4) >> 4; // Sign-extend 4-bit
-    sample = (sample << (12 - shift));
+    if (shift <= 12) {
+        sample = sample << (12 - shift);
+    } else {
+        sample = 0;
+    }
 
     int32_t f = ((int32_t)voice->prev1 * f_k0[filter] + (int32_t)voice->prev2 * f_k1[filter]) >> 6;
     sample += f;
@@ -157,6 +169,39 @@ static int16_t decode_adpcm_sample(SPUVoice* voice, uint8_t nibble, uint8_t shif
     voice->prev2 = voice->prev1;
     voice->prev1 = (int16_t)sample;
     return (int16_t)sample;
+}
+
+static void spu_voice_step_sample(PS1SPU* spu, SPUVoice* voice) {
+    uint32_t block_addr = (voice->current_addr & ~15) % PS1_SPU_RAM_SIZE;
+    uint8_t shift = spu->ram[block_addr] & 0x0F;
+    uint8_t filter = (spu->ram[block_addr] >> 4) & 0x07;
+    if (filter > 4) filter = 0;
+
+    int byte_idx = 2 + (voice->sample_in_block / 2);
+    uint8_t byte = spu->ram[(block_addr + byte_idx) % PS1_SPU_RAM_SIZE];
+    uint8_t nibble = (voice->sample_in_block & 1) ? (byte >> 4) : (byte & 0x0F);
+
+    voice->current_decoded_sample = decode_adpcm_sample(voice, nibble, shift, filter);
+
+    voice->sample_in_block++;
+    if (voice->sample_in_block >= 28) {
+        voice->sample_in_block = 0;
+        uint8_t flags = spu->ram[(block_addr + 1) % PS1_SPU_RAM_SIZE];
+        if (flags & 4) { // Loop start marker
+            voice->loop_addr = block_addr;
+        }
+        if (flags & 1) { // Loop end
+            if (flags & 2) { // Loop repeat
+                voice->current_addr = voice->loop_addr;
+            } else {
+                voice->active = false;
+                voice->adsr_phase = ADSR_PHASE_OFF;
+                return;
+            }
+        } else {
+            voice->current_addr = (block_addr + 16) % PS1_SPU_RAM_SIZE;
+        }
+    }
 }
 
 void ps1_spu_generate_samples(PS1SPU* spu, int16_t* output_stereo, int num_samples) {
@@ -193,32 +238,15 @@ void ps1_spu_generate_samples(PS1SPU* spu, int16_t* output_stereo, int num_sampl
                 }
             }
 
-            // Simple sample synthesis
-            uint32_t block_addr = (voice->current_addr & ~15) % PS1_SPU_RAM_SIZE;
-            uint8_t shift = spu->ram[block_addr] & 0x0F;
-            uint8_t filter = (spu->ram[block_addr] >> 4) & 0x07;
-            if (filter > 4) filter = 0;
-
-            int nibble_idx = (voice->current_addr % 14) * 2;
-            uint8_t byte = spu->ram[(block_addr + 2 + (nibble_idx / 2)) % PS1_SPU_RAM_SIZE];
-            uint8_t nibble = (nibble_idx & 1) ? (byte >> 4) : (byte & 0x0F);
-
-            int16_t sample = decode_adpcm_sample(voice, nibble, shift, filter);
-            int32_t amp = (sample * voice->adsr_level) >> 15;
-
+            int32_t amp = ((int32_t)voice->current_decoded_sample * voice->adsr_level) >> 15;
             mix_l += (amp * voice->vol_left) >> 15;
             mix_r += (amp * voice->vol_right) >> 15;
 
             voice->sample_counter += voice->sample_rate;
-            if (voice->sample_counter >= 0x1000) {
+            while (voice->sample_counter >= 0x1000) {
                 voice->sample_counter -= 0x1000;
-                voice->current_addr++;
-                if ((voice->current_addr % 16) == 0) {
-                    uint8_t flags = spu->ram[(voice->current_addr - 15) % PS1_SPU_RAM_SIZE];
-                    if (flags & 1) { // Loop end
-                        voice->current_addr = voice->loop_addr;
-                    }
-                }
+                spu_voice_step_sample(spu, voice);
+                if (!voice->active) break;
             }
         }
 

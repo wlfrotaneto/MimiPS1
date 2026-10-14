@@ -35,6 +35,8 @@ typedef struct {
     int16_t  prev1;
     int16_t  prev2;
     uint32_t sample_counter;    // Fixed-point counter for pitch resampling
+    uint8_t  sample_in_block;   // 0..27 samples within 16-byte block
+    int16_t  current_decoded_sample;
 
     bool     key_on;
     bool     key_off;
