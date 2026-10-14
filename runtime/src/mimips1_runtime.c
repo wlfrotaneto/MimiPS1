@@ -163,6 +163,19 @@ void ps1_trigger_irq(PS1Context* ctx, uint32_t irq_bit) {
         ps1_bios_deliver_event(ctx, 0xF4000001, 0x0001);
         ps1_bios_deliver_event(ctx, 0xF0000002, 0x0001); // RCnt 1 (H-Blank / V-Sync)
         ps1_bios_deliver_event(ctx, 0xF2000002, 0x0001);
+        ps1_bios_deliver_event(ctx, 0xF2000002, 0x0002);
+    }
+    if (irq_bit & IRQ_TIMER0) {
+        ps1_bios_deliver_event(ctx, 0xF2000000, 0x0001);
+        ps1_bios_deliver_event(ctx, 0xF2000000, 0x0002);
+    }
+    if (irq_bit & IRQ_TIMER1) {
+        ps1_bios_deliver_event(ctx, 0xF2000001, 0x0001);
+        ps1_bios_deliver_event(ctx, 0xF2000001, 0x0002);
+    }
+    if (irq_bit & IRQ_TIMER2) {
+        ps1_bios_deliver_event(ctx, 0xF2000002, 0x0001);
+        ps1_bios_deliver_event(ctx, 0xF2000002, 0x0002);
     }
     if (irq_bit & IRQ_CDROM) {
         if (ctx->cdrom.irq_flag == 2 || ctx->cdrom.irq_flag == 3) {
