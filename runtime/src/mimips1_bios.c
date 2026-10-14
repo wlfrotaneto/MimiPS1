@@ -537,8 +537,7 @@ bool ps1_bios_handle_b0(PS1Context* ctx, uint32_t func) {
             }
             r[2] = 0xFFFFFFFF;
             return true;
-        case 0x09: // CloseEvent(event) (Rev 1)
-        case 0x19: // CloseEvent(event) (Rev 2)
+        case 0x09: // CloseEvent(event)
             {
                 int ev_idx = r[4] & (PS1_MAX_EVENTS - 1);
                 if (ev_idx < PS1_MAX_EVENTS) {
@@ -549,8 +548,7 @@ bool ps1_bios_handle_b0(PS1Context* ctx, uint32_t func) {
                 }
             }
             return true;
-        case 0x0A: // WaitEvent(event) (Rev 1)
-        case 0x1A: // WaitEvent(event) (Rev 2)
+        case 0x0A: // WaitEvent(event)
             {
                 int ev_idx = r[4] & (PS1_MAX_EVENTS - 1);
                 if (ev_idx < PS1_MAX_EVENTS) {
@@ -559,6 +557,24 @@ bool ps1_bios_handle_b0(PS1Context* ctx, uint32_t func) {
                 } else {
                     r[2] = 0;
                 }
+            }
+            return true;
+        case 0x19: // setjmp(env)
+            {
+                uint32_t* env = (uint32_t*)get_host_ptr(ctx, r[4]);
+                if (env) {
+                    for (int i = 0; i < 16; i++) env[i] = r[16 + i];
+                }
+                r[2] = 0;
+            }
+            return true;
+        case 0x1A: // longjmp(env, val)
+            {
+                uint32_t* env = (uint32_t*)get_host_ptr(ctx, r[4]);
+                if (env) {
+                    for (int i = 0; i < 16; i++) r[16 + i] = env[i];
+                }
+                r[2] = r[5] ? r[5] : 1;
             }
             return true;
         case 0x0B: // TestEvent(event) (Rev 1)

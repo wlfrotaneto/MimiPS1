@@ -381,8 +381,8 @@ bool mips_emit_c_code(const MipsProgram* prog, const EmitterOptions* opts) {
         fprintf(fc, "    switch (ctx->cpu.pc) {\n");
         MipsBlock* b = fn->first_block;
         while (b) {
-            if (b->num_insns > 0) {
-                fprintf(fc, "        case 0x%08X: goto loc_%08x;\n", b->start_pc, b->start_pc);
+            for (int k = 0; k < b->num_insns; k++) {
+                fprintf(fc, "        case 0x%08X: goto loc_%08x;\n", b->insns[k].pc, b->insns[k].pc);
             }
             b = b->next;
         }
