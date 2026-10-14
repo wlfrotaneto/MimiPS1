@@ -305,8 +305,23 @@ void ps1_gpu_draw_line(PS1GPU* gpu, const PS1Vertex* v0, const PS1Vertex* v1, bo
     }
 }
 
+static uint32_t s_gp0_stats[256];
+static int s_logged_polys = 0;
+static int s_gp0_stats_enabled = -1;
+
+static inline void check_gp0_stats_env(void) {
+    if (s_gp0_stats_enabled < 0) {
+        const char* e = getenv("MIMIPS1_GP0_STATS");
+        s_gp0_stats_enabled = (e && atoi(e) == 1) ? 1 : 0;
+    }
+}
+
 static void execute_gp0_packet(PS1GPU* gpu) {
+    check_gp0_stats_env();
     uint8_t op = (gpu->gp0_fifo[0] >> 24) & 0xFF;
+    if (s_gp0_stats_enabled) {
+        s_gp0_stats[op]++;
+    }
     
     // Fill Rectangle in VRAM
     if (op == 0x02) {
@@ -371,6 +386,15 @@ static void execute_gp0_packet(PS1GPU* gpu) {
                     gpu->tex_color_mode = (uint8_t)((uv >> 23) & 0x03);
                 }
             }
+        }
+
+        if (s_gp0_stats_enabled && s_logged_polys < 5) {
+            s_logged_polys++;
+            printf("[GP0 Poly #%d Op=0x%02X] %s %s vertices:", s_logged_polys, op, is_quad ? "Quad" : "Tri", is_textured ? "Textured" : "Flat");
+            for (int i = 0; i < num_v; i++) {
+                printf(" v%d=(%d, %d)", i, v[i].x, v[i].y);
+            }
+            printf("\n");
         }
 
         bool raw_texture = (op & 1) != 0;
@@ -627,5 +651,31 @@ void ps1_gpu_write_gp1(PS1GPU* gpu, uint32_t val) {
             break;
         case 0x10: // Get GPU Info
             break;
+    }
+}
+
+void ps1_gpu_vblank(PS1GPU* gpu) {
+    (void)gpu;
+    check_gp0_stats_env();
+    if (!s_gp0_stats_enabled) return;
+
+    static int s_vblank_count = 0;
+    s_vblank_count++;
+    if (s_vblank_count >= 60) {
+        s_vblank_count = 0;
+        printf("\n=== [GP0 Histogram (60 VBlanks)] ===\n");
+        bool any = false;
+        for (int i = 0; i < 256; i++) {
+            if (s_gp0_stats[i] > 0) {
+                printf("  Op 0x%02X: %u\n", i, s_gp0_stats[i]);
+                any = true;
+            }
+        }
+        if (!any) {
+            printf("  (no GP0 commands)\n");
+        }
+        printf("=====================================\n\n");
+        memset(s_gp0_stats, 0, sizeof(s_gp0_stats));
+        s_logged_polys = 0;
     }
 }

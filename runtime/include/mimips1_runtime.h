@@ -58,6 +58,10 @@ struct PS1Context {
     uint64_t    start_time_ns;
     uint64_t    next_vblank_cycle;
 
+    // Executable bounds
+    uint32_t    exe_text_addr;
+    uint32_t    exe_text_size;
+
     // Video display / presentation options
     int         aspect_ratio; // 0 = 4:3 (original), 1 = 16:9, 2 = Stretch
     bool        crt_scanlines;

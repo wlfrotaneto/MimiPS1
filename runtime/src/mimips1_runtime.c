@@ -108,6 +108,9 @@ bool ps1_runtime_load_exe(PS1Context* ctx, const char* exe_path) {
     ctx->cpu.r[29] = sp;      // $sp
     ctx->cpu.r[30] = sp;      // $fp
 
+    ctx->exe_text_addr = text_addr;
+    ctx->exe_text_size = text_size;
+
     printf("[MimiPS1] Loaded EXE: %s\n", exe_path);
     printf("         Entry PC: 0x%08X, Text: 0x%08X (size: %u bytes)\n", init_pc, text_addr, text_size);
     printf("         GP: 0x%08X, SP: 0x%08X\n", init_gp, sp);
@@ -239,6 +242,7 @@ void ps1_cpu_tick(PS1Context* ctx, uint32_t cycles) {
             ctx->gpu.interlace_field = !ctx->gpu.interlace_field;
 
             ps1_trigger_irq(ctx, IRQ_VBLANK);
+            ps1_gpu_vblank(&ctx->gpu);
         }
     }
 

@@ -67,12 +67,33 @@ void ps1_call_indirect(PS1Context* ctx, uint32_t target_pc) {
     }
 
     // In case target function is not found or is dynamic (e.g. overlay loaded from disc).
-    // Diagnostic: report each unmapped target only once (bitmap over 2MB RAM word addresses).
-    static uint8_t seen_unmapped[PS1_RAM_SIZE / 4 / 8];
-    uint32_t word = (target_pc & PS1_RAM_MIRROR_MASK) >> 2;
-    if (!(seen_unmapped[word >> 3] & (1u << (word & 7)))) {
-        seen_unmapped[word >> 3] |= (uint8_t)(1u << (word & 7));
-        fprintf(stderr, "[CPU] Indirect call to unmapped PC: 0x%08X (ra=0x%08X)\n", target_pc, ctx->cpu.r[31]);
+    // Diagnostic: report each unmapped target only once using an open-addressing hash set.
+    #define UNMAPPED_HASH_SIZE 1024
+    static uint32_t s_seen_unmapped[UNMAPPED_HASH_SIZE];
+    static bool s_seen_unmapped_init = false;
+    if (!s_seen_unmapped_init) {
+        memset(s_seen_unmapped, 0xFF, sizeof(s_seen_unmapped));
+        s_seen_unmapped_init = true;
+    }
+    uint32_t h = (target_pc ^ (target_pc >> 10)) % UNMAPPED_HASH_SIZE;
+    bool already_seen = false;
+    for (int i = 0; i < 32; i++) {
+        uint32_t slot = (h + i) % UNMAPPED_HASH_SIZE;
+        if (s_seen_unmapped[slot] == target_pc) {
+            already_seen = true;
+            break;
+        }
+        if (s_seen_unmapped[slot] == 0xFFFFFFFF) {
+            s_seen_unmapped[slot] = target_pc;
+            break;
+        }
+    }
+    if (!already_seen) {
+        uint32_t base = ctx->exe_text_addr ? ctx->exe_text_addr : 0x80010000;
+        uint32_t end = base + (ctx->exe_text_size ? ctx->exe_text_size : 0x70000);
+        bool inside = (target_pc >= base && target_pc < end);
+        fprintf(stderr, "[CPU MISS] Unmapped indirect call target: 0x%08X (RA=0x%08X) [%s EXE range 0x%08X..0x%08X]\n",
+                target_pc, ctx->cpu.r[31], inside ? "INSIDE" : "OUTSIDE", base, end);
     }
 }
 

@@ -95,6 +95,7 @@ uint32_t ps1_gpu_read_status(PS1GPU* gpu);
 uint32_t ps1_gpu_read_data(PS1GPU* gpu);
 void     ps1_gpu_write_gp0(PS1GPU* gpu, uint32_t val);
 void     ps1_gpu_write_gp1(PS1GPU* gpu, uint32_t val);
+void     ps1_gpu_vblank(PS1GPU* gpu);
 
 // Rasterizer Primitives
 void ps1_gpu_draw_triangle(PS1GPU* gpu, const PS1Vertex* v0, const PS1Vertex* v1, const PS1Vertex* v2, bool textured, bool gouraud, bool semi_trans, bool raw_texture);
