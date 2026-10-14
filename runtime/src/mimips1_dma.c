@@ -37,20 +37,38 @@ void ps1_dma_write(PS1Context* ctx, uint32_t addr, uint32_t val) {
         else if (reg == 0x04) ctx->dma.channels[channel].bcr = val;
         else if (reg == 0x08) {
             ctx->dma.channels[channel].chcr = val;
-            if (val & (1 << 24) || (channel == DMA_GPU && (val & (1 << 28)))) {
+            if ((val & (1 << 24)) || (val & (1 << 28))) {
                 ps1_dma_execute(ctx, channel);
             }
         }
     } else if (addr == 0x1F8010F0) {
         ctx->dma.dpcr = val;
     } else if (addr == 0x1F8010F4) {
-        ctx->dma.dicr = val;
+        // Bits 0-23: writable (enables, force IRQ, etc.)
+        // Bits 24-30: write-1-to-clear (acknowledge channel IRQ flags)
+        uint32_t current_flags = (ctx->dma.dicr >> 24) & 0x7F;
+        uint32_t ack_flags = (val >> 24) & 0x7F;
+        current_flags &= ~ack_flags;
+
+        ctx->dma.dicr = (val & 0x00FFFFFF) | (current_flags << 24);
+
+        // Recalculate Master Interrupt Flag (bit 31)
+        bool force_irq = (ctx->dma.dicr & (1 << 15)) != 0;
+        bool master_en = (ctx->dma.dicr & (1 << 23)) != 0;
+        uint32_t enables = (ctx->dma.dicr >> 16) & 0x7F;
+        uint32_t flags = (ctx->dma.dicr >> 24) & 0x7F;
+        if (force_irq || (master_en && ((enables & flags) != 0))) {
+            ctx->dma.dicr |= (1u << 31);
+        } else {
+            ctx->dma.dicr &= ~(1u << 31);
+        }
     }
 }
 
 void ps1_dma_execute(PS1Context* ctx, int channel_idx) {
     DMAChannel* ch = &ctx->dma.channels[channel_idx];
     uint32_t sync_mode = (ch->chcr >> 9) & 0x03;
+    printf("[DMA] execute ch=%d sync=%u madr=0x%08X bcr=0x%08X chcr=0x%08X\n", channel_idx, sync_mode, ch->madr, ch->bcr, ch->chcr);
 
     // GPU DMA Channel (2)
     if (channel_idx == DMA_GPU) {
@@ -117,12 +135,14 @@ void ps1_dma_execute(PS1Context* ctx, int channel_idx) {
         }
         uint32_t count = (ch->bcr & 0xFFFF) * (ch->bcr >> 16 ? (ch->bcr >> 16) : 1);
         uint32_t addr = ch->madr & 0x1FFFFC;
+        printf("[DMA3] madr=0x%08X count=%u avail=%d pos=%d\n", addr, count, ctx->cdrom.data_bytes_avail, ctx->cdrom.data_read_pos);
         for (uint32_t i = 0; i < count && addr < PS1_RAM_SIZE; i++) {
             if (ctx->cdrom.data_bytes_avail >= 4) {
                 uint32_t w = *(uint32_t*)&ctx->cdrom.data_fifo[ctx->cdrom.data_read_pos];
                 ctx->cdrom.data_read_pos += 4;
                 ctx->cdrom.data_bytes_avail -= 4;
                 *(uint32_t*)&ctx->memory.ram[addr] = w;
+                if (i == 0) printf("[DMA3 First Word] 0x%08X\n", w);
             }
             addr += 4;
         }
@@ -145,9 +165,30 @@ void ps1_dma_execute(PS1Context* ctx, int channel_idx) {
             addr += 4;
         }
     }
+    // MDEC DMA Channels (0, 1)
+    else if (channel_idx == DMA_MDEC_IN || channel_idx == DMA_MDEC_OUT) {
+        // Dummy MDEC transfer completion
+    }
 
     // Finish DMA
     ch->chcr &= ~(1 << 24); // Clear busy flag
-    ch->chcr &= ~(1 << 28);
-    ps1_trigger_irq(ctx, IRQ_DMA);
+    ch->chcr &= ~(1 << 28); // Clear manual trigger flag
+
+    // Deliver SPU completion event if applicable
+    if (channel_idx == DMA_SPU) {
+        ps1_bios_deliver_event(ctx, 0xF0000009, 0x0020);
+    }
+
+    // Set channel interrupt flag in DICR (bit 24 + channel_idx)
+    ctx->dma.dicr |= (1u << (24 + channel_idx));
+
+    // Recalculate Master Interrupt Flag (bit 31)
+    bool force_irq = (ctx->dma.dicr & (1 << 15)) != 0;
+    bool master_en = (ctx->dma.dicr & (1 << 23)) != 0;
+    uint32_t enables = (ctx->dma.dicr >> 16) & 0x7F;
+    uint32_t flags = (ctx->dma.dicr >> 24) & 0x7F;
+    if (force_irq || (master_en && ((enables & flags) != 0))) {
+        ctx->dma.dicr |= (1u << 31);
+        ps1_trigger_irq(ctx, IRQ_DMA);
+    }
 }

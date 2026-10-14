@@ -41,6 +41,8 @@ void ps1_register_function_range(PS1Context* ctx, uint32_t start, uint32_t end, 
 void ps1_call_indirect(PS1Context* ctx, uint32_t target_pc) {
     if (target_pc == 0 || target_pc == 0xFFFFFFFF || (target_pc < 0x1000 && target_pc != 0xA0 && target_pc != 0xB0 && target_pc != 0xC0)) return; // Guard against null or invalid function pointer calls
 
+    ps1_cpu_tick(ctx, 32);
+
     // Check BIOS vector hooks
     uint32_t masked = target_pc & 0x1FFFFFFF;
     if (masked == 0xA0) {
@@ -89,9 +91,6 @@ void ps1_trigger_syscall(PS1Context* ctx) {
 void ps1_trigger_break(PS1Context* ctx) {
     ctx->cpu.cop0[COP0_EPC] = ctx->cpu.pc;
     ctx->cpu.cop0[COP0_CAUSE] = (9 << 2); // Breakpoint exception code
-    uint32_t sr = ctx->cpu.cop0[COP0_SR];
-    ctx->cpu.cop0[COP0_SR] = (sr & ~0x3F) | ((sr << 2) & 0x3C);
-    ctx->cpu.pc = 0x80000080;
 }
 
 void ps1_rfe(PS1Context* ctx) {

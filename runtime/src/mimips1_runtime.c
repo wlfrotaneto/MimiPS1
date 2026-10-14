@@ -2,6 +2,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/time.h>
+#include <unistd.h>
 
 PS1Context* ps1_runtime_create(void) {
     PS1Context* ctx = (PS1Context*)calloc(1, sizeof(PS1Context));
@@ -104,6 +106,30 @@ void ps1_trigger_irq(PS1Context* ctx, uint32_t irq_bit) {
         ctx->cpu.cop0[COP0_CAUSE] |= (1 << 10);
     }
 
+    // Deliver to SysEnqIntRP queues (registered via C0:02)
+    for (int p = 0; p < 4; p++) {
+        uint32_t cur = ctx->bios.intrp_heads[p];
+        while (cur != 0) {
+            uint32_t next = ps1_mem_read32(ctx, cur);
+            uint32_t func = ps1_mem_read32(ctx, cur + 4);
+            if (func != 0) {
+                uint32_t saved_r[32];
+                uint32_t saved_pc = ctx->cpu.pc;
+                uint32_t saved_hi = ctx->cpu.hi;
+                uint32_t saved_lo = ctx->cpu.lo;
+                memcpy(saved_r, ctx->cpu.r, sizeof(saved_r));
+
+                ps1_call_indirect(ctx, func);
+
+                memcpy(ctx->cpu.r, saved_r, sizeof(saved_r));
+                ctx->cpu.pc = saved_pc;
+                ctx->cpu.hi = saved_hi;
+                ctx->cpu.lo = saved_lo;
+            }
+            cur = next;
+        }
+    }
+
     // Deliver to registered Psy-Q interrupt callbacks if present
     if (ctx->bios.irq_callback_table != 0) {
         for (int i = 0; i <= 10; i++) {
@@ -139,8 +165,13 @@ void ps1_trigger_irq(PS1Context* ctx, uint32_t irq_bit) {
         ps1_bios_deliver_event(ctx, 0xF2000002, 0x0001);
     }
     if (irq_bit & IRQ_CDROM) {
-        ps1_bios_deliver_event(ctx, 0xF0000003, 0x0020); // CD Complete event
-        ps1_bios_deliver_event(ctx, 0xF0000003, 0x0010); // CD Data Ready event
+        if (ctx->cdrom.irq_flag == 2 || ctx->cdrom.irq_flag == 3) {
+            ps1_bios_deliver_event(ctx, 0xF0000003, 0x0020); // CD Complete / Ack event
+        } else if (ctx->cdrom.irq_flag == 1) {
+            ps1_bios_deliver_event(ctx, 0xF0000003, 0x0010); // CD Data Ready event
+        } else if (ctx->cdrom.irq_flag == 5) {
+            ps1_bios_deliver_event(ctx, 0xF0000003, 0x0040); // CD Disk Error event
+        }
         ps1_bios_deliver_event(ctx, 0xF0000003, 0x0000); // Any CD event
     }
     if (irq_bit & IRQ_DMA) {
@@ -148,21 +179,46 @@ void ps1_trigger_irq(PS1Context* ctx, uint32_t irq_bit) {
     }
 }
 
+void ps1_cpu_tick(PS1Context* ctx, uint32_t cycles) {
+    if (!ctx || ctx->in_tick) return;
+    ctx->in_tick = true;
+
+    ctx->cycle_counter += cycles;
+    ctx->cycles_since_vblank += cycles;
+
+    // Tick hardware timers and CD-ROM
+    ps1_timers_tick(ctx, cycles);
+    ps1_cdrom_tick(ctx, cycles);
+
+    // Trigger V-Blank when frame period completes (~564,480 cycles = ~1/60th sec)
+    if (ctx->cycles_since_vblank >= PS1_CYCLES_PER_FRAME) {
+        ctx->cycles_since_vblank -= PS1_CYCLES_PER_FRAME;
+        ctx->frame_count++;
+        ctx->gpu.interlace_field = !ctx->gpu.interlace_field;
+
+        ps1_trigger_irq(ctx, IRQ_VBLANK);
+
+        // Throttle to authentic ~60 FPS
+        static struct timeval last_frame_tv = {0, 0};
+        struct timeval now_tv;
+        gettimeofday(&now_tv, NULL);
+        if (last_frame_tv.tv_sec != 0) {
+            long elapsed_us = (now_tv.tv_sec - last_frame_tv.tv_sec) * 1000000 + (now_tv.tv_usec - last_frame_tv.tv_usec);
+            if (elapsed_us > 0 && elapsed_us < 16666) {
+                usleep((useconds_t)(16666 - elapsed_us));
+                gettimeofday(&now_tv, NULL);
+            }
+        }
+        last_frame_tv = now_tv;
+    }
+
+    ctx->in_tick = false;
+}
+
 void ps1_runtime_run_frame(PS1Context* ctx) {
     if (!ctx || !ctx->running || ctx->paused) return;
 
-    // Execute static recompiled slice
-    // Call entry point or active PC if registered
     if (ctx->cpu.pc != 0) {
         ps1_call_indirect(ctx, ctx->cpu.pc);
     }
-
-    // Tick Hardware Timers and CD-ROM for the frame duration (~564,480 cycles)
-    ps1_timers_tick(ctx, PS1_CYCLES_PER_FRAME);
-    ps1_cdrom_tick(ctx, PS1_CYCLES_PER_FRAME);
-
-    // Trigger V-Blank Interrupt
-    ps1_trigger_irq(ctx, IRQ_VBLANK);
-
-    ctx->frame_count++;
 }

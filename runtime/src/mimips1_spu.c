@@ -49,6 +49,15 @@ uint16_t ps1_spu_read(PS1SPU* spu, uint32_t addr) {
             if (spu->voices[16 + i].active && spu->voices[16 + i].adsr_phase != ADSR_PHASE_OFF) s |= (1 << i);
         }
         return s;
+    } else if (offset == 0x1A6) {
+        return (uint16_t)(spu->transfer_addr >> 3);
+    } else if (offset == 0x1A8) {
+        uint16_t val = 0;
+        if (spu->transfer_addr < (PS1_SPU_RAM_SIZE - 1)) {
+            val = *(uint16_t*)&spu->ram[spu->transfer_addr];
+            spu->transfer_addr = (spu->transfer_addr + 2) & 0x7FFFF;
+        }
+        return val;
     } else if (offset == 0x1AA) {
         return spu->ctrl;
     } else if (offset == 0x1AE) {

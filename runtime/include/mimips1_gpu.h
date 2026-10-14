@@ -76,6 +76,7 @@ struct PS1GPU {
     bool     disp_enable;
     bool     is_pal;
     bool     is_24bit;
+    bool     interlace_field;
 
     // VRAM Image transfer state
     struct {

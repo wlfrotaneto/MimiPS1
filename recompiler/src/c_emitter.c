@@ -303,7 +303,11 @@ bool mips_emit_c_code(const MipsProgram* prog, const EmitterOptions* opts) {
                     fprintf(fc, "loc_%08x:\n", ds->pc);
                     emit_instruction_c(fc, ds); // Execute delay slot
                     if (br->target >= fn->entry_pc && br->target < fn->end_pc) {
-                        fprintf(fc, "    if (_take_branch) goto loc_%08x;\n", br->target);
+                        if (br->target <= br->pc) {
+                            fprintf(fc, "    if (_take_branch) { ps1_cpu_tick(ctx, 32); goto loc_%08x; }\n", br->target);
+                        } else {
+                            fprintf(fc, "    if (_take_branch) goto loc_%08x;\n", br->target);
+                        }
                     } else {
                         fprintf(fc, "    if (_take_branch) { CALL_INDIRECT(0x%08X); return; }\n", br->target);
                     }
@@ -335,6 +339,9 @@ bool mips_emit_c_code(const MipsProgram* prog, const EmitterOptions* opts) {
                     fprintf(fc, "loc_%08x:\n", ds->pc);
                     emit_instruction_c(fc, ds); // Execute delay slot
                     if (br->target >= fn->entry_pc && br->target < fn->end_pc) {
+                        if (br->target <= br->pc) {
+                            fprintf(fc, "    ps1_cpu_tick(ctx, 32);\n");
+                        }
                         fprintf(fc, "    goto loc_%08x;\n", br->target);
                     } else {
                         fprintf(fc, "    CALL_INDIRECT(0x%08X);\n    return;\n", br->target);

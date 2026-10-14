@@ -45,10 +45,14 @@ struct PS1BIOS {
     // BIOS Pad buffers (InitPAD)
     uint32_t    pad_buf[2];
     uint32_t    pad_len[2];
+    uint32_t    pad_button_dest;
     bool        pad_active;
 
     // Psy-Q / Hardware IRQ callback table (registered via A0:72)
     uint32_t    irq_callback_table;
+
+    // SysEnqIntRP queues (registered via C0:02, priorities 0..3)
+    uint32_t    intrp_heads[4];
 };
 
 void ps1_bios_init(PS1Context* ctx);

@@ -101,12 +101,6 @@ static const char* metal_shader_src =
 - (void)drawInMTKView:(MTKView *)view {
     if (!_context) return;
 
-    // Synchronize hardware timers, CD-ROM and 60 FPS V-Blank IRQ
-    ps1_timers_tick(_context, PS1_CYCLES_PER_FRAME);
-    ps1_cdrom_tick(_context, PS1_CYCLES_PER_FRAME);
-    ps1_trigger_irq(_context, IRQ_VBLANK);
-    _context->frame_count++;
-
     // Convert PS1 BGR555 VRAM to 32-bit BGRA host framebuffer
     for (int y = 0; y < PS1_VRAM_HEIGHT; y++) {
         for (int x = 0; x < PS1_VRAM_WIDTH; x++) {

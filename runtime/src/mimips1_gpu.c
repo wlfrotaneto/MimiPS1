@@ -36,7 +36,13 @@ void ps1_gpu_reset(PS1GPU* gpu) {
 }
 
 uint32_t ps1_gpu_read_status(PS1GPU* gpu) {
-    return gpu->status;
+    uint32_t stat = gpu->status;
+    if (gpu->interlace_field) {
+        stat |= (1u << 31) | (1u << 13);
+    } else {
+        stat &= ~((1u << 31) | (1u << 13));
+    }
+    return stat;
 }
 
 uint32_t ps1_gpu_read_data(PS1GPU* gpu) {
@@ -311,6 +317,7 @@ static void execute_gp0_packet(PS1GPU* gpu) {
         int16_t w = (int16_t)(gpu->gp0_fifo[2] & 0xFFFF);
         int16_t h = (int16_t)(gpu->gp0_fifo[2] >> 16);
         ps1_gpu_clear_vram(gpu, x, y, w, h, r, g, b);
+        printf("[GPU 02] Clear VRAM: (%d, %d)-(%dx%d) color=(%d,%d,%d)\n", x, y, w, h, r, g, b);
         return;
     }
 

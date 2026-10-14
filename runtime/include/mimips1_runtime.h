@@ -51,6 +51,11 @@ struct PS1Context {
     bool        paused;
     uint64_t    frame_count;
 
+    // Cycle & event timing
+    uint64_t    cycle_counter;
+    uint32_t    cycles_since_vblank;
+    bool        in_tick;
+
     // Video display / presentation options
     int         aspect_ratio; // 0 = 4:3 (original), 1 = 16:9, 2 = Stretch
     bool        crt_scanlines;
@@ -69,6 +74,9 @@ void        ps1_runtime_run_frame(PS1Context* ctx);
 
 // Hardware Interrupt trigger
 void        ps1_trigger_irq(PS1Context* ctx, uint32_t irq_bit);
+
+// Advance CPU and hardware subsystem cycles deterministically
+void        ps1_cpu_tick(PS1Context* ctx, uint32_t cycles);
 
 // Convenience macros for generated recompiled C code
 #define R(reg)          (ctx->cpu.r[reg])

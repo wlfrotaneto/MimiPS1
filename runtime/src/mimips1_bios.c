@@ -201,8 +201,63 @@ static int bios_file_close(PS1Context* ctx, int fd) {
     return 0;
 }
 
+static void ps1_bios_vprintf(PS1Context* ctx, const char* fmt) {
+    if (!fmt) return;
+    char out_buf[1024];
+    int out_pos = 0;
+    int arg_idx = 0;
+    uint32_t* r = ctx->cpu.r;
+
+    for (int i = 0; fmt[i] != '\0' && out_pos < (int)(sizeof(out_buf) - 64); i++) {
+        if (fmt[i] == '%' && fmt[i+1] != '\0') {
+            i++;
+            if (fmt[i] == '%') {
+                out_buf[out_pos++] = '%';
+                continue;
+            }
+
+            uint32_t val = 0;
+            if (arg_idx == 0) val = r[5];
+            else if (arg_idx == 1) val = r[6];
+            else if (arg_idx == 2) val = r[7];
+            else val = ps1_mem_read32(ctx, r[29] + 16 + (arg_idx - 3) * 4);
+            arg_idx++;
+
+            char sub_fmt[16];
+            int sub_idx = 0;
+            sub_fmt[sub_idx++] = '%';
+            while (fmt[i] && (fmt[i] == '0' || (fmt[i] >= '1' && fmt[i] <= '9') || fmt[i] == '.' || fmt[i] == '-' || fmt[i] == 'l')) {
+                if (sub_idx < 14) sub_fmt[sub_idx++] = fmt[i];
+                i++;
+            }
+            char spec = fmt[i];
+            sub_fmt[sub_idx++] = spec;
+            sub_fmt[sub_idx] = '\0';
+
+            if (spec == 's') {
+                const char* s = (const char*)get_host_ptr(ctx, val);
+                out_pos += snprintf(&out_buf[out_pos], sizeof(out_buf) - out_pos, "%s", s ? s : "(null)");
+            } else if (spec == 'd' || spec == 'i') {
+                out_pos += snprintf(&out_buf[out_pos], sizeof(out_buf) - out_pos, sub_fmt, (int32_t)val);
+            } else if (spec == 'u' || spec == 'x' || spec == 'X' || spec == 'p') {
+                out_pos += snprintf(&out_buf[out_pos], sizeof(out_buf) - out_pos, sub_fmt, val);
+            } else if (spec == 'c') {
+                out_buf[out_pos++] = (char)val;
+            }
+        } else {
+            out_buf[out_pos++] = fmt[i];
+        }
+    }
+    out_buf[out_pos] = '\0';
+    printf("[PS1 TTY] %s\n", out_buf);
+    fflush(stdout);
+}
+
 bool ps1_bios_handle_a0(PS1Context* ctx, uint32_t func) {
     uint32_t* r = ctx->cpu.r;
+    if (func != 0x2A && func != 0x27 && func != 0x28 && func != 0x29 && func != 0x2B && func != 0x2C && func != 0x2D) {
+        printf("[BIOS A0] func=0x%02X, a0=0x%08X, a1=0x%08X, a2=0x%08X, ra=0x%08X\n", func, r[4], r[5], r[6], r[31]);
+    }
 
     switch (func) {
         case 0x00: // FileOpen(name, mode)
@@ -283,17 +338,26 @@ bool ps1_bios_handle_a0(PS1Context* ctx, uint32_t func) {
                 r[2] = s ? (uint32_t)strlen(s) : 0;
             }
             return true;
-        case 0x27: // memcpy(dst, src, len)
+        case 0x27: // bcopy(src, dst, len)
             {
-                void* dst = get_host_ptr(ctx, r[4]);
-                void* src = get_host_ptr(ctx, r[5]);
+                void* src = get_host_ptr(ctx, r[4]);
+                void* dst = get_host_ptr(ctx, r[5]);
                 if (dst && src) {
-                    memcpy(dst, src, r[6]);
+                    memmove(dst, src, r[6]);
                 }
-                r[2] = r[4]; // return dst
+                r[2] = r[5];
             }
             return true;
-        case 0x28: // memset(dst, val, len)
+        case 0x28: // bzero(dst, len)
+            {
+                void* dst = get_host_ptr(ctx, r[4]);
+                if (dst) {
+                    memset(dst, 0, r[5]);
+                }
+                r[2] = r[4];
+            }
+            return true;
+        case 0x2B: // memset(dst, val, len)
             {
                 void* dst = get_host_ptr(ctx, r[4]);
                 if (dst) {
@@ -302,10 +366,37 @@ bool ps1_bios_handle_a0(PS1Context* ctx, uint32_t func) {
                 r[2] = r[4];
             }
             return true;
-        case 0x2A: // memcmp(s1, s2, n)
+        case 0x2C: // memmove(dst, src, len)
             {
-                void* s1 = get_host_ptr(ctx, r[4]);
-                void* s2 = get_host_ptr(ctx, r[5]);
+                void* dst = get_host_ptr(ctx, r[4]);
+                void* src = get_host_ptr(ctx, r[5]);
+                if (dst && src) {
+                    memmove(dst, src, r[6]);
+                }
+                r[2] = r[4];
+            }
+            return true;
+        case 0x29: // bcmp(s1, s2, len)
+            {
+                const void* s1 = get_host_ptr(ctx, r[4]);
+                const void* s2 = get_host_ptr(ctx, r[5]);
+                r[2] = (s1 && s2) ? (uint32_t)memcmp(s1, s2, r[6]) : 0;
+            }
+            return true;
+        case 0x2A: // memcpy(dst, src, len)
+            {
+                void* dst = get_host_ptr(ctx, r[4]);
+                const void* src = get_host_ptr(ctx, r[5]);
+                if (dst && src) {
+                    memcpy(dst, src, r[6]);
+                }
+                r[2] = r[4];
+            }
+            return true;
+        case 0x2D: // memcmp(s1, s2, len)
+            {
+                const void* s1 = get_host_ptr(ctx, r[4]);
+                const void* s2 = get_host_ptr(ctx, r[5]);
                 r[2] = (s1 && s2) ? (uint32_t)memcmp(s1, s2, r[6]) : 0;
             }
             return true;
@@ -323,8 +414,7 @@ bool ps1_bios_handle_a0(PS1Context* ctx, uint32_t func) {
             {
                 const char* fmt = (const char*)get_host_ptr(ctx, r[4]);
                 if (fmt) {
-                    printf("[PS1 TTY] %s\n", fmt);
-                    fflush(stdout);
+                    ps1_bios_vprintf(ctx, fmt);
                 }
                 r[2] = 0;
             }
@@ -337,6 +427,10 @@ bool ps1_bios_handle_a0(PS1Context* ctx, uint32_t func) {
             r[2] = 0;
             return true;
         case 0x44: // FlushCache()
+            return true;
+        case 0x49: // GPU_cw(val)
+            ps1_gpu_write_gp0(&ctx->gpu, r[4]);
+            r[2] = 0;
             return true;
         case 0x70: // _bu_init()
         case 0x71: // _bu_deinit()
@@ -383,8 +477,8 @@ void ps1_bios_deliver_event(PS1Context* ctx, uint32_t class_id, uint32_t spec) {
 
 bool ps1_bios_handle_b0(PS1Context* ctx, uint32_t func) {
     uint32_t* r = ctx->cpu.r;
-    if (func != 0x3D) {
-        printf("[BIOS B0] 0x%02X (a0=0x%08X, a1=0x%08X)\n", func, r[4], r[5]);
+    if (func != 0x3D && func != 0x16) {
+        printf("[BIOS B0] 0x%02X (a0=0x%08X, a1=0x%08X, ra=0x%08X)\n", func, r[4], r[5], r[31]);
     }
 
     switch (func) {
@@ -402,6 +496,24 @@ bool ps1_bios_handle_b0(PS1Context* ctx, uint32_t func) {
         case 0x14: // StopPAD()
             ctx->bios.pad_active = false;
             r[2] = 1;
+            return true;
+        case 0x15: // OutdatedPadInitAndStart(type, button_dest, unused, unused)
+            ctx->bios.pad_button_dest = r[5];
+            ctx->bios.pad_active = true;
+            r[2] = 2;
+            return true;
+        case 0x16: // OutdatedPadGetButtons()
+            {
+                uint16_t b0 = ctx->input.pads[0].buttons;
+                uint16_t b1 = ctx->input.pads[1].buttons;
+                uint16_t rev0 = ((b0 & 0xFF) << 8) | ((b0 >> 8) & 0xFF);
+                uint16_t rev1 = ((b1 & 0xFF) << 8) | ((b1 >> 8) & 0xFF);
+                uint32_t ret = ((uint32_t)rev1 << 16) | rev0;
+                if (ctx->bios.pad_button_dest != 0) {
+                    ps1_mem_write32(ctx, ctx->bios.pad_button_dest, ret);
+                }
+                r[2] = ret;
+            }
             return true;
         case 0x07: // DeliverEvent(class, spec) (Rev 1)
         case 0x17: // DeliverEvent(class, spec) (Rev 2)
@@ -456,7 +568,7 @@ bool ps1_bios_handle_b0(PS1Context* ctx, uint32_t func) {
                 if (ev_idx < PS1_MAX_EVENTS) {
                     bool was_trig = ctx->bios.events[ev_idx].triggered;
                     ctx->bios.events[ev_idx].triggered = false;
-                    r[2] = was_trig ? 1 : 1;
+                    r[2] = was_trig ? 1 : 0;
                 } else {
                     r[2] = 0;
                 }
@@ -604,11 +716,41 @@ bool ps1_bios_handle_c0(PS1Context* ctx, uint32_t func) {
             r[2] = 1;
             return true;
         case 0x02: // SysEnqIntRP(priority, queue_struct)
-            r[2] = 0;
-            return true;
+            {
+                uint32_t prio = r[4] & 3;
+                uint32_t new_node = r[5];
+                if (new_node != 0) {
+                    uint32_t old_head = ctx->bios.intrp_heads[prio];
+                    ps1_mem_write32(ctx, new_node, old_head); // new_node->next = old_head
+                    ctx->bios.intrp_heads[prio] = new_node;
+                    uint32_t fn = ps1_mem_read32(ctx, new_node + 4);
+                    printf("[BIOS C0:02] SysEnqIntRP(prio=%u, node=0x%08X, func=0x%08X)\n", prio, new_node, fn);
+                }
+                r[2] = 0;
+                return true;
+            }
         case 0x03: // SysDeqIntRP(priority, queue_struct)
-            r[2] = r[5];
-            return true;
+            {
+                uint32_t prio = r[4] & 3;
+                uint32_t target_node = r[5];
+                uint32_t cur = ctx->bios.intrp_heads[prio];
+                uint32_t prev = 0;
+                while (cur != 0) {
+                    if (cur == target_node) {
+                        uint32_t next = ps1_mem_read32(ctx, cur);
+                        if (prev != 0) {
+                            ps1_mem_write32(ctx, prev, next);
+                        } else {
+                            ctx->bios.intrp_heads[prio] = next;
+                        }
+                        break;
+                    }
+                    prev = cur;
+                    cur = ps1_mem_read32(ctx, cur);
+                }
+                r[2] = target_node;
+                return true;
+            }
         case 0x0A: // ChangeClearRCnt(rcnt, flag)
             r[2] = 0;
             return true;
@@ -643,6 +785,15 @@ bool ps1_bios_handle_syscall(PS1Context* ctx) {
 
 void ps1_bios_update_pads(PS1Context* ctx) {
     if (!ctx || !ctx->bios.pad_active) return;
+
+    if (ctx->bios.pad_button_dest != 0) {
+        uint16_t b0 = ctx->input.pads[0].buttons;
+        uint16_t b1 = ctx->input.pads[1].buttons;
+        uint16_t rev0 = ((b0 & 0xFF) << 8) | ((b0 >> 8) & 0xFF);
+        uint16_t rev1 = ((b1 & 0xFF) << 8) | ((b1 >> 8) & 0xFF);
+        uint32_t ret = ((uint32_t)rev1 << 16) | rev0;
+        ps1_mem_write32(ctx, ctx->bios.pad_button_dest, ret);
+    }
 
     for (int i = 0; i < 2; i++) {
         uint32_t buf_addr = ctx->bios.pad_buf[i];

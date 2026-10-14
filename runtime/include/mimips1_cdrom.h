@@ -56,8 +56,11 @@ struct PS1CDROM {
     bool     muted;
     uint32_t cdda_sample_offset;
 
-    uint8_t  irq_flag;
-    uint8_t  irq_enable;
+    uint32_t irq_flag;
+    uint32_t irq_enable;
+    uint32_t read_cycles;
+    bool     pending_int2;
+    uint32_t int2_delay_cycles;
 };
 
 void     ps1_cdrom_init(PS1CDROM* cdrom);

@@ -82,6 +82,8 @@ static void handle_cdrom_command(PS1Context* ctx, uint8_t cmd) {
                 uint32_t f = ((cd->target_f >> 4) * 10) + (cd->target_f & 0xF);
                 cd->current_lba = (m * 60 * 75) + (s * 75) + f;
                 if (cd->current_lba >= 150) cd->current_lba -= 150; // 2-second pregap
+                printf("[CDROM] Setloc %02X:%02X:%02X (%u:%u:%u) -> LBA %u\n",
+                       cd->target_m, cd->target_s, cd->target_f, m, s, f, cd->current_lba);
             }
             push_response(cd, cd->status);
             cd->irq_flag = 3;
@@ -99,29 +101,41 @@ static void handle_cdrom_command(PS1Context* ctx, uint8_t cmd) {
         case 0x1B: // ReadS
             cd->status |= CD_STAT_READ_BIT;
             cd->reading = true;
+            cd->read_cycles = 0;
+            printf("[CDROM] ReadN started at LBA %u (mode=0x%02X)\n", cd->current_lba, cd->mode);
             push_response(cd, cd->status);
             cd->irq_flag = 3;
             break;
         case 0x08: // Stop
             cd->playing = false;
             cd->reading = false;
+            cd->read_cycles = 0;
             cd->status &= ~(CD_STAT_READ_BIT | CD_STAT_PLAY_BIT);
             push_response(cd, cd->status);
             cd->irq_flag = 3;
+            cd->pending_int2 = true;
+            cd->int2_delay_cycles = 1000;
             break;
         case 0x09: // Pause
             cd->reading = false;
             cd->playing = false;
+            cd->read_cycles = 0;
             cd->status &= ~(CD_STAT_READ_BIT | CD_STAT_PLAY_BIT);
+            printf("[CDROM] Pause at LBA %u\n", cd->current_lba);
             push_response(cd, cd->status);
             cd->irq_flag = 3;
+            cd->pending_int2 = true;
+            cd->int2_delay_cycles = 1000;
             break;
         case 0x0A: // Init
             cd->reading = false;
             cd->playing = false;
+            cd->read_cycles = 0;
             cd->status = CD_STAT_SPINDLE_ON;
             push_response(cd, cd->status);
             cd->irq_flag = 3;
+            cd->pending_int2 = true;
+            cd->int2_delay_cycles = 1000;
             break;
         case 0x0B: // Mute
             cd->muted = true;
@@ -143,6 +157,8 @@ static void handle_cdrom_command(PS1Context* ctx, uint8_t cmd) {
             cd->seeking = true;
             push_response(cd, cd->status);
             cd->irq_flag = 3;
+            cd->pending_int2 = true;
+            cd->int2_delay_cycles = 1000;
             break;
         case 0x19: // Test
             push_response(cd, 0x94); // PSX CD-ROM version
@@ -168,29 +184,58 @@ static void handle_cdrom_command(PS1Context* ctx, uint8_t cmd) {
             break;
     }
     cd->param_count = 0;
-    ctx->memory.ram[0x000B8BF4 & PS1_RAM_MIRROR_MASK] = 3;
-    ctx->memory.ram[0x000B8BF5 & PS1_RAM_MIRROR_MASK] = 3;
-    ctx->memory.ram[0x000B8BF6 & PS1_RAM_MIRROR_MASK] = 3;
     ps1_trigger_irq(ctx, IRQ_CDROM);
 }
 
 void ps1_cdrom_tick(PS1Context* ctx, uint32_t cycles) {
     PS1CDROM* cd = &ctx->cdrom;
+
+    // Handle asynchronous completion INT2 for commands like Pause, Stop, Seek, Init
+    if (cd->pending_int2) {
+        if (cd->irq_flag == 0) { // Only deliver after INT3 has been acknowledged
+            if (cd->int2_delay_cycles > cycles) {
+                cd->int2_delay_cycles -= cycles;
+            } else {
+                cd->int2_delay_cycles = 0;
+                cd->pending_int2 = false;
+                cd->seeking = false;
+                cd->response_count = 0;
+                cd->response_read_pos = 0;
+                push_response(cd, cd->status);
+                cd->irq_flag = 2; // INT2: Complete
+                ps1_trigger_irq(ctx, IRQ_CDROM);
+            }
+        }
+    }
+
     if (cd->reading && cd->image_file) {
-        // Read sector
-        long offset = (long)cd->current_lba * cd->sector_size + cd->data_offset;
-        fseek(cd->image_file, offset, SEEK_SET);
-        size_t r = fread(cd->data_fifo, 1, CDROM_SECTOR_SIZE_DATA, cd->image_file);
-        if (r > 0) {
-            cd->data_bytes_avail = (int)r;
-            cd->data_read_pos = 0;
-            cd->current_lba++;
-            push_response(cd, cd->status);
-            cd->irq_flag = 1; // Sector data ready IRQ
-            ctx->memory.ram[0x000B8BF4 & PS1_RAM_MIRROR_MASK] = 2;
-            ctx->memory.ram[0x000B8BF5 & PS1_RAM_MIRROR_MASK] = 2;
-            ctx->memory.ram[0x000B8BF6 & PS1_RAM_MIRROR_MASK] = 2;
-            ps1_trigger_irq(ctx, IRQ_CDROM);
+        // Do not interrupt while previous IRQ (e.g. INT3 acknowledge) is still unhandled
+        if (cd->irq_flag != 0) {
+            return;
+        }
+
+        cd->read_cycles += cycles;
+        // Adapted for static recompilation cycle pacing (~64 branch loops)
+        uint32_t sector_period = (cd->mode & 0x80) ? 2048 : 4096;
+
+        if (cd->read_cycles >= sector_period) {
+            cd->read_cycles -= sector_period;
+
+            // Read sector
+            long offset = (long)cd->current_lba * cd->sector_size + cd->data_offset;
+            fseek(cd->image_file, offset, SEEK_SET);
+            size_t r = fread(cd->data_fifo, 1, CDROM_SECTOR_SIZE_DATA, cd->image_file);
+            if (r > 0) {
+                cd->data_bytes_avail = (int)r;
+                cd->data_read_pos = 0;
+                cd->current_lba++;
+                cd->response_count = 0;
+                cd->response_read_pos = 0;
+                push_response(cd, cd->status);
+                cd->irq_flag = 1; // Sector data ready IRQ (INT1)
+                printf("[CDROM] Sector Delivered: LBA %u (avail=%d)\n", cd->current_lba - 1, cd->data_bytes_avail);
+                ps1_trigger_irq(ctx, IRQ_CDROM);
+            }
         }
     }
 }
@@ -244,6 +289,10 @@ void ps1_cdrom_write(PS1Context* ctx, uint32_t addr, uint8_t val) {
             break;
         case 1:
             if (cd->reg_index == 0) {
+                if (val == 0x02) {
+                    printf("[CDROM Setloc Caller] PC=0x%08X, RA=0x%08X, SP=0x%08X, A0=0x%08X, A1=0x%08X\n",
+                           ctx->cpu.pc, ctx->cpu.r[31], ctx->cpu.r[29], ctx->cpu.r[4], ctx->cpu.r[5]);
+                }
                 handle_cdrom_command(ctx, val);
             } else if (cd->reg_index == 3) {
                 // Audio volume setting

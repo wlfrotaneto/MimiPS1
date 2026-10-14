@@ -61,13 +61,7 @@ uint16_t ps1_mem_read16(PS1Context* ctx, uint32_t addr) {
 uint32_t ps1_mem_read32(PS1Context* ctx, uint32_t addr) {
     uint32_t paddr = addr & 0x1FFFFFFF;
     if (__builtin_expect(paddr < 0x00800000, 1)) {
-        uint32_t ram_addr = (paddr & PS1_RAM_MIRROR_MASK) & ~3;
-        if (ram_addr == 0x000B2E0C) {
-            uint32_t val = *(uint32_t*)&ctx->memory.ram[ram_addr];
-            *(uint32_t*)&ctx->memory.ram[ram_addr] = val + 1;
-            return val + 1;
-        }
-        return *(uint32_t*)&ctx->memory.ram[ram_addr];
+        return *(uint32_t*)&ctx->memory.ram[(paddr & PS1_RAM_MIRROR_MASK) & ~3];
     } else if (paddr >= 0x1F800000 && paddr < 0x1F800400) {
         return *(uint32_t*)&ctx->memory.scratchpad[paddr - 0x1F800000];
     } else if (paddr >= 0x1FC00000 && paddr < 0x1FC80000) {
@@ -142,6 +136,8 @@ void ps1_mem_swr(PS1Context* ctx, uint32_t addr, uint32_t val) {
 }
 
 uint32_t ps1_mmio_read(PS1Context* ctx, uint32_t addr, int size) {
+    ps1_cpu_tick(ctx, 32);
+
     // Interrupt Controller
     if (addr == 0x1F801070) {
         return ctx->irq_stat;
@@ -182,6 +178,9 @@ void ps1_mmio_write(PS1Context* ctx, uint32_t addr, uint32_t val, int size) {
     if (addr == 0x1F801070) {
         // Acknowledge IRQ bits (write 0 to acknowledge, or AND)
         ctx->irq_stat &= val;
+        if ((ctx->irq_stat & ctx->irq_mask) == 0) {
+            ctx->cpu.cop0[COP0_CAUSE] &= ~(1 << 10);
+        }
     } else if (addr == 0x1F801074) {
         ctx->irq_mask = val;
     }
