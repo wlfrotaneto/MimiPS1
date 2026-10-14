@@ -12,7 +12,7 @@ extern "C" {
 // PlayStation 1 Hardware Clock Frequencies
 #define PS1_CPU_CLOCK_HZ        33868800ULL
 #define PS1_GPU_DOT_CLOCK_NTSC  53222400ULL
-#define PS1_CYCLES_PER_FRAME    (PS1_CPU_CLOCK_HZ / 60)
+#define PS1_CYCLES_PER_FRAME    10240 // Scaled for AOT recompilation: 2.5 sectors @ 4096 = 10240 cycles/frame (60 FPS)
 #define PS1_CYCLES_PER_SCANLINE (PS1_CPU_CLOCK_HZ / (60 * 263)) // ~2145 cycles
 
 // Memory Sizes
