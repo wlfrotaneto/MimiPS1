@@ -456,7 +456,7 @@ void ps1_bios_deliver_event(PS1Context* ctx, uint32_t class_id, uint32_t spec) {
             ctx->bios.events[i].class_id == class_id &&
             (ctx->bios.events[i].spec == spec || ctx->bios.events[i].spec == 0)) {
             ctx->bios.events[i].triggered = true;
-            if (ctx->bios.events[i].func != 0 && ctx->bios.events[i].func != 0xFFFFFFFF) {
+            if (ctx->bios.events[i].func != 0 && ctx->bios.events[i].func != 0xFFFFFFFF && !ctx->in_irq_callback) {
                 // Save complete CPU context so interrupt callback does not corrupt active registers
                 uint32_t saved_r[32];
                 uint32_t saved_pc = ctx->cpu.pc;
@@ -469,7 +469,10 @@ void ps1_bios_deliver_event(PS1Context* ctx, uint32_t class_id, uint32_t spec) {
                     ctx->cpu.r[29] = 0x801FFF00; // Safe dedicated interrupt stack
                 }
 
+                bool prev_irq = ctx->in_irq_callback;
+                ctx->in_irq_callback = true;
                 ps1_call_indirect(ctx, ctx->bios.events[i].func);
+                ctx->in_irq_callback = prev_irq;
 
                 memcpy(ctx->cpu.r, saved_r, sizeof(saved_r));
                 ctx->cpu.pc = saved_pc;

@@ -198,6 +198,7 @@ static void handle_cdrom_command(PS1Context* ctx, uint8_t cmd) {
         case 0x15: // SeekL
         case 0x16: // SeekP
             cd->seeking = true;
+            cd->status |= CD_STAT_SEEK_BIT;
             push_response(cd, cd->status);
             cd->irq_flag = 3;
             cd->pending_int2 = true;
@@ -242,6 +243,7 @@ void ps1_cdrom_tick(PS1Context* ctx, uint32_t cycles) {
                 cd->int2_delay_cycles = 0;
                 cd->pending_int2 = false;
                 cd->seeking = false;
+                cd->status &= ~CD_STAT_SEEK_BIT;
                 cd->response_count = 0;
                 cd->response_read_pos = 0;
                 push_response(cd, cd->status);
@@ -258,8 +260,8 @@ void ps1_cdrom_tick(PS1Context* ctx, uint32_t cycles) {
         }
 
         cd->read_cycles += cycles;
-        // Adapted for static recompilation cycle pacing (~64 branch loops)
-        uint32_t sector_period = (cd->mode & 0x80) ? 2048 : 4096;
+        // Pacing for static recompilation (~1000-2000 branch loops per sector)
+        uint32_t sector_period = (cd->mode & 0x80) ? 32768 : 65536;
 
         if (cd->read_cycles >= sector_period) {
             cd->read_cycles -= sector_period;
@@ -343,8 +345,8 @@ void ps1_cdrom_write(PS1Context* ctx, uint32_t addr, uint8_t val) {
         case 2:
             if (cd->reg_index == 0 && cd->param_count < 16) {
                 cd->param_fifo[cd->param_count++] = val;
-            } else if (cd->reg_index == 1) {
-                // Interrupt Enable Register (0x1F801802.1)
+            } else if (cd->reg_index == 1 || cd->reg_index == 3) {
+                // Interrupt Enable Register (0x1F801802.1 / 0x1F801802.3)
                 cd->irq_enable = val & 0x1F;
             }
             break;
@@ -355,9 +357,14 @@ void ps1_cdrom_write(PS1Context* ctx, uint32_t addr, uint8_t val) {
                     cd->data_read_pos = 0;
                     cd->data_bytes_avail = (cd->mode & 0x20) ? (cd->is_raw ? 2340 : 2048) : CDROM_SECTOR_SIZE_DATA;
                 }
-            } else if (cd->reg_index == 1) {
-                // Acknowledge IRQ bits (0x1F801803.1)
+            } else if (cd->reg_index == 1 || cd->reg_index == 3) {
+                // Acknowledge IRQ bits (0x1F801803.1 / 0x1F801803.3)
                 cd->irq_flag &= ~(val & 0x1F);
+                if (cd->irq_flag == 0) {
+                    cd->response_count = 0;
+                    cd->response_read_pos = 0;
+                    cd->read_cycles = 0;
+                }
                 if (val & 0x40) {
                     cd->param_count = 0; // Reset parameter FIFO
                 }

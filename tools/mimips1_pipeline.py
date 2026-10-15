@@ -168,6 +168,7 @@ def recompile_exe(exe_path, output_dir):
 def compile_native_app(recompiled_dir, app_name):
     print(f"⚡ {BOLD}Compiling native ARM64 binary with Apple Clang (-O3 -flto)...{RESET}")
     runtime_inc = os.path.join(ROOT_DIR, "runtime", "include")
+    recompiler_inc = os.path.join(ROOT_DIR, "recompiler", "include")
     runtime_src_dir = os.path.join(ROOT_DIR, "runtime", "src")
     platform_dir = os.path.join(runtime_src_dir, "platform")
     
@@ -184,6 +185,7 @@ def compile_native_app(recompiled_dir, app_name):
         os.path.join(runtime_src_dir, "mimips1_input.c"),
         os.path.join(runtime_src_dir, "mimips1_card.c"),
         os.path.join(runtime_src_dir, "mimips1_runtime.c"),
+        os.path.join(ROOT_DIR, "recompiler", "src", "mips_disasm.c"),
         os.path.join(platform_dir, "macos_metal.m"),
         os.path.join(platform_dir, "macos_audio.m"),
         os.path.join(platform_dir, "macos_main.m"),
@@ -199,7 +201,7 @@ def compile_native_app(recompiled_dir, app_name):
 
     sources_str = " ".join([f'"{s}"' for s in runtime_sources])
     frameworks = "-framework Cocoa -framework Metal -framework MetalKit -framework AudioToolbox -framework GameController -framework CoreHaptics"
-    cflags = f"-O2 -arch arm64 -fobjc-arc -I\"{runtime_inc}\" -I\"{recompiled_dir}\" -Wall -Wno-unused-variable -Wno-unused-label -Wno-parentheses"
+    cflags = f"-O2 -arch arm64 -fobjc-arc -I\"{runtime_inc}\" -I\"{recompiler_inc}\" -I\"{recompiled_dir}\" -Wall -Wno-unused-variable -Wno-unused-label -Wno-parentheses"
 
     cmd = f"clang {cflags} {sources_str} {frameworks} -o \"{output_bin}\""
     run_command(cmd)

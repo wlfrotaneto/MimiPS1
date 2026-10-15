@@ -126,6 +126,25 @@ void ps1_trigger_irq(PS1Context* ctx, uint32_t irq_bit) {
         ctx->cpu.cop0[COP0_CAUSE] |= (1 << 10);
     }
 
+    if (ctx->in_irq_callback) {
+        // Non-reentrant: mark events as triggered without invoking nested C callbacks
+        for (int i = 0; i < PS1_MAX_EVENTS; i++) {
+            if (ctx->bios.events[i].is_open && ctx->bios.events[i].enabled) {
+                if ((irq_bit & IRQ_CDROM) && ctx->bios.events[i].class_id == 0xF0000003) {
+                    uint32_t sp = ctx->bios.events[i].spec;
+                    if (sp == 0 || ((ctx->cdrom.irq_flag == 2 || ctx->cdrom.irq_flag == 3) && sp == 0x0020) ||
+                        (ctx->cdrom.irq_flag == 1 && sp == 0x0010)) {
+                        ctx->bios.events[i].triggered = true;
+                    }
+                }
+                if ((irq_bit & IRQ_TIMER2) && ctx->bios.events[i].class_id == 0xF2000002) {
+                    ctx->bios.events[i].triggered = true;
+                }
+            }
+        }
+        return;
+    }
+
     // Deliver to SysEnqIntRP queues (registered via C0:02)
     for (int p = 0; p < 4; p++) {
         uint32_t cur = ctx->bios.intrp_heads[p];
@@ -144,7 +163,10 @@ void ps1_trigger_irq(PS1Context* ctx, uint32_t irq_bit) {
                     ctx->cpu.r[29] = 0x801FFF00; // Safe dedicated interrupt stack
                 }
 
+                bool prev_irq = ctx->in_irq_callback;
+                ctx->in_irq_callback = true;
                 ps1_call_indirect(ctx, func);
+                ctx->in_irq_callback = prev_irq;
 
                 memcpy(ctx->cpu.r, saved_r, sizeof(saved_r));
                 ctx->cpu.pc = saved_pc;
@@ -172,7 +194,10 @@ void ps1_trigger_irq(PS1Context* ctx, uint32_t irq_bit) {
                         ctx->cpu.r[29] = 0x801FFF00; // Safe dedicated interrupt stack
                     }
 
+                    bool prev_irq = ctx->in_irq_callback;
+                    ctx->in_irq_callback = true;
                     ps1_call_indirect(ctx, cb_func);
+                    ctx->in_irq_callback = prev_irq;
 
                     memcpy(ctx->cpu.r, saved_r, sizeof(saved_r));
                     ctx->cpu.pc = saved_pc;
@@ -222,7 +247,7 @@ void ps1_trigger_irq(PS1Context* ctx, uint32_t irq_bit) {
 
 void ps1_cpu_tick(PS1Context* ctx, uint32_t cycles) {
     (void)cycles;
-    if (!ctx || ctx->in_tick) return;
+    if (!ctx || ctx->in_tick || ctx->in_irq_callback) return;
     ctx->in_tick = true;
 
     uint64_t now_ns = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);

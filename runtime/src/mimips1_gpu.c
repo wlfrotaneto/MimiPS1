@@ -91,7 +91,8 @@ static int get_gp0_cmd_len(uint32_t cmd) {
         // Line
         bool is_poly = (op & (1 << 3)) != 0;
         bool is_gouraud = (op & (1 << 4)) != 0;
-        return is_poly ? 3 : (is_gouraud ? 3 : 2);
+        if (is_poly) return 0; // Poly-line is variable-length terminated by 0x55555555
+        return is_gouraud ? 4 : 3;
     }
     if (op >= 0x60 && op <= 0x7F) {
         // Rectangles / Sprites
@@ -410,31 +411,68 @@ static void execute_gp0_packet(PS1GPU* gpu) {
 
     // Lines
     if (op >= 0x40 && op <= 0x5F) {
+        bool is_poly = (op & (1 << 3)) != 0;
         bool is_gouraud = (op & (1 << 4)) != 0;
         bool semi_trans = (op & (1 << 1)) != 0;
-        PS1Vertex v0, v1;
-        memset(&v0, 0, sizeof(v0));
-        memset(&v1, 0, sizeof(v1));
-        uint8_t cr = (uint8_t)(gpu->gp0_fifo[0] & 0xFF);
-        uint8_t cg = (uint8_t)((gpu->gp0_fifo[0] >> 8) & 0xFF);
-        uint8_t cb = (uint8_t)((gpu->gp0_fifo[0] >> 16) & 0xFF);
-        v0.r = cr; v0.g = cg; v0.b = cb;
-        uint32_t pos0 = gpu->gp0_fifo[1];
-        v0.x = gp0_coord(pos0 & 0xFFFF);
-        v0.y = gp0_coord(pos0 >> 16);
-        int idx = 2;
-        if (is_gouraud) {
-            uint32_t c1 = gpu->gp0_fifo[idx++];
-            v1.r = (uint8_t)(c1 & 0xFF);
-            v1.g = (uint8_t)((c1 >> 8) & 0xFF);
-            v1.b = (uint8_t)((c1 >> 16) & 0xFF);
+
+        if (!is_poly) {
+            PS1Vertex v0, v1;
+            memset(&v0, 0, sizeof(v0));
+            memset(&v1, 0, sizeof(v1));
+            uint8_t cr = (uint8_t)(gpu->gp0_fifo[0] & 0xFF);
+            uint8_t cg = (uint8_t)((gpu->gp0_fifo[0] >> 8) & 0xFF);
+            uint8_t cb = (uint8_t)((gpu->gp0_fifo[0] >> 16) & 0xFF);
+            v0.r = cr; v0.g = cg; v0.b = cb;
+            uint32_t pos0 = gpu->gp0_fifo[1];
+            v0.x = gp0_coord(pos0 & 0xFFFF);
+            v0.y = gp0_coord(pos0 >> 16);
+            int idx = 2;
+            if (is_gouraud) {
+                uint32_t c1 = gpu->gp0_fifo[idx++];
+                v1.r = (uint8_t)(c1 & 0xFF);
+                v1.g = (uint8_t)((c1 >> 8) & 0xFF);
+                v1.b = (uint8_t)((c1 >> 16) & 0xFF);
+            } else {
+                v1.r = cr; v1.g = cg; v1.b = cb;
+            }
+            uint32_t pos1 = gpu->gp0_fifo[idx++];
+            v1.x = gp0_coord(pos1 & 0xFFFF);
+            v1.y = gp0_coord(pos1 >> 16);
+            ps1_gpu_draw_line(gpu, &v0, &v1, is_gouraud, semi_trans);
         } else {
-            v1.r = cr; v1.g = cg; v1.b = cb;
+            // Poly-line (variable length)
+            PS1Vertex v_prev, v_curr;
+            memset(&v_prev, 0, sizeof(v_prev));
+            memset(&v_curr, 0, sizeof(v_curr));
+            uint8_t cr = (uint8_t)(gpu->gp0_fifo[0] & 0xFF);
+            uint8_t cg = (uint8_t)((gpu->gp0_fifo[0] >> 8) & 0xFF);
+            uint8_t cb = (uint8_t)((gpu->gp0_fifo[0] >> 16) & 0xFF);
+            v_prev.r = cr; v_prev.g = cg; v_prev.b = cb;
+            uint32_t pos0 = gpu->gp0_fifo[1];
+            v_prev.x = gp0_coord(pos0 & 0xFFFF);
+            v_prev.y = gp0_coord(pos0 >> 16);
+
+            int idx = 2;
+            while (idx < gpu->gp0_fifo_len) {
+                if ((gpu->gp0_fifo[idx] & 0xF000F000) == 0x50005000 || gpu->gp0_fifo[idx] == 0x55555555) {
+                    break;
+                }
+                if (is_gouraud) {
+                    if (idx + 1 >= gpu->gp0_fifo_len) break;
+                    uint32_t c = gpu->gp0_fifo[idx++];
+                    v_curr.r = (uint8_t)(c & 0xFF);
+                    v_curr.g = (uint8_t)((c >> 8) & 0xFF);
+                    v_curr.b = (uint8_t)((c >> 16) & 0xFF);
+                } else {
+                    v_curr.r = cr; v_curr.g = cg; v_curr.b = cb;
+                }
+                uint32_t pos = gpu->gp0_fifo[idx++];
+                v_curr.x = gp0_coord(pos & 0xFFFF);
+                v_curr.y = gp0_coord(pos >> 16);
+                ps1_gpu_draw_line(gpu, &v_prev, &v_curr, is_gouraud, semi_trans);
+                v_prev = v_curr;
+            }
         }
-        uint32_t pos1 = gpu->gp0_fifo[idx++];
-        v1.x = gp0_coord(pos1 & 0xFFFF);
-        v1.y = gp0_coord(pos1 >> 16);
-        ps1_gpu_draw_line(gpu, &v0, &v1, is_gouraud, semi_trans);
         return;
     }
 
@@ -595,10 +633,24 @@ void ps1_gpu_write_gp0(PS1GPU* gpu, uint32_t val) {
         gpu->gp0_words_needed = get_gp0_cmd_len(val);
     }
 
+    uint8_t op = (gpu->gp0_cmd >> 24) & 0xFF;
+    bool is_polyline = (op >= 0x48 && op <= 0x4F) || (op >= 0x58 && op <= 0x5F);
+
+    if (is_polyline && gpu->gp0_fifo_len >= 3) {
+        if ((val & 0xF000F000) == 0x50005000 || val == 0x55555555) {
+            execute_gp0_packet(gpu);
+            gpu->gp0_fifo_len = 0;
+            return;
+        }
+    }
+
     if (gpu->gp0_fifo_len < 64) {
         gpu->gp0_fifo[gpu->gp0_fifo_len++] = val;
     }
-    if (gpu->gp0_fifo_len >= gpu->gp0_words_needed || gpu->gp0_fifo_len >= 64) {
+    if (!is_polyline && gpu->gp0_fifo_len >= gpu->gp0_words_needed) {
+        execute_gp0_packet(gpu);
+        gpu->gp0_fifo_len = 0;
+    } else if (is_polyline && gpu->gp0_fifo_len >= 64) {
         execute_gp0_packet(gpu);
         gpu->gp0_fifo_len = 0;
     }
@@ -630,12 +682,19 @@ void ps1_gpu_write_gp1(PS1GPU* gpu, uint32_t val) {
             }
             break;
         case 0x05: // Display Start
-            gpu->disp_x = (int16_t)(val & 0x3FF);
+            gpu->disp_x = (int16_t)(val & 0x3FE); // 2-pixel aligned in hardware
             gpu->disp_y = (int16_t)((val >> 10) & 0x1FF);
+            memcpy(gpu->front_vram, gpu->vram, sizeof(gpu->vram));
+            gpu->front_disp_x = gpu->disp_x;
+            gpu->front_disp_y = gpu->disp_y;
+            gpu->front_disp_w = gpu->disp_w;
+            gpu->front_disp_h = gpu->disp_h;
             break;
         case 0x06: // Horizontal Display Range
             break;
-        case 0x07: // Vertical Display Range
+        case 0x07: // Vertical Display Range (bits 0..9 = Y1, bits 10..19 = Y2)
+            gpu->disp_y1 = (int16_t)(val & 0x3FF);
+            gpu->disp_y2 = (int16_t)((val >> 10) & 0x3FF);
             break;
         case 0x08: // Display Mode
             {
@@ -660,7 +719,14 @@ void ps1_gpu_write_gp1(PS1GPU* gpu, uint32_t val) {
 }
 
 void ps1_gpu_vblank(PS1GPU* gpu) {
-    (void)gpu;
+    if (gpu->front_disp_w == 0) {
+        memcpy(gpu->front_vram, gpu->vram, sizeof(gpu->vram));
+        gpu->front_disp_x = gpu->disp_x;
+        gpu->front_disp_y = gpu->disp_y;
+        gpu->front_disp_w = gpu->disp_w;
+        gpu->front_disp_h = gpu->disp_h;
+    }
+
     check_gp0_stats_env();
     if (!s_gp0_stats_enabled) return;
 

@@ -101,10 +101,11 @@ static const char* metal_shader_src =
 - (void)drawInMTKView:(MTKView *)view {
     if (!_context) return;
 
-    // Convert PS1 BGR555 VRAM to 32-bit BGRA host framebuffer
+    // Convert PS1 BGR555 VRAM to 32-bit BGRA host framebuffer (using front_vram snapshot for tear-free rendering)
+    const uint16_t (*source_vram)[PS1_VRAM_WIDTH] = _context->gpu.front_disp_w > 0 ? _context->gpu.front_vram : _context->gpu.vram;
     for (int y = 0; y < PS1_VRAM_HEIGHT; y++) {
         for (int x = 0; x < PS1_VRAM_WIDTH; x++) {
-            uint16_t c = _context->gpu.vram[y][x];
+            uint16_t c = source_vram[y][x];
             uint8_t r = (uint8_t)(((c >> 0)  & 0x1F) << 3);
             uint8_t g = (uint8_t)(((c >> 5)  & 0x1F) << 3);
             uint8_t b = (uint8_t)(((c >> 10) & 0x1F) << 3);
@@ -145,16 +146,28 @@ static const char* metal_shader_src =
             [encoder setViewport:vp];
         }
 
-        int disp_x = _context->gpu.disp_x;
-        int disp_y = _context->gpu.disp_y;
-        int disp_w = _context->gpu.disp_w > 0 ? _context->gpu.disp_w : 320;
-        int disp_h = _context->gpu.disp_h > 0 ? _context->gpu.disp_h : 240;
+        int disp_x = _context->gpu.front_disp_w > 0 ? _context->gpu.front_disp_x : _context->gpu.disp_x;
+        int disp_y = _context->gpu.front_disp_w > 0 ? _context->gpu.front_disp_y : _context->gpu.disp_y;
+        int disp_w = _context->gpu.front_disp_w > 0 ? _context->gpu.front_disp_w : (_context->gpu.disp_w > 0 ? _context->gpu.disp_w : 320);
+        int disp_h = _context->gpu.front_disp_h > 0 ? _context->gpu.front_disp_h : (_context->gpu.disp_h > 0 ? _context->gpu.disp_h : 240);
+
+        int crop_top = 0;
+        int crop_bottom = 0;
+        int16_t y1 = _context->gpu.disp_y1;
+        int16_t y2 = _context->gpu.disp_y2;
+        if (y1 > 0x10 && y2 > y1) {
+            int active_h = y2 - y1;
+            if (active_h < disp_h) {
+                crop_top = (disp_h - active_h) / 2;
+                crop_bottom = disp_h - active_h - crop_top;
+            }
+        }
 
         simd_float4 uv_bounds = simd_make_float4(
             (float)disp_x / (float)PS1_VRAM_WIDTH,
-            (float)disp_y / (float)PS1_VRAM_HEIGHT,
+            (float)(disp_y + crop_top) / (float)PS1_VRAM_HEIGHT,
             (float)(disp_x + disp_w) / (float)PS1_VRAM_WIDTH,
-            (float)(disp_y + disp_h) / (float)PS1_VRAM_HEIGHT
+            (float)(disp_y + disp_h - crop_bottom) / (float)PS1_VRAM_HEIGHT
         );
         [encoder setVertexBytes:&uv_bounds length:sizeof(simd_float4) atIndex:0];
 

@@ -73,10 +73,16 @@ struct PS1GPU {
     // Display Area
     int16_t  disp_x, disp_y;
     int16_t  disp_w, disp_h;
+    int16_t  disp_y1, disp_y2;
     bool     disp_enable;
     bool     is_pal;
     bool     is_24bit;
     bool     interlace_field;
+
+    // Double buffering snapshot & display crop
+    uint16_t front_vram[PS1_VRAM_HEIGHT][PS1_VRAM_WIDTH];
+    int16_t  front_disp_x, front_disp_y, front_disp_w, front_disp_h;
+    int16_t  front_crop_top, front_crop_bottom;
 
     // VRAM Image transfer state
     struct {

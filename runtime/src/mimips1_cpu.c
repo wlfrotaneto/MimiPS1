@@ -202,9 +202,9 @@ static void ps1_interpret_fallback(PS1Context* ctx, uint32_t start_pc) {
             } else if (insn.is_call) {
                 uint32_t ret_reg = (insn.id == MIPS_OP_JALR) ? (insn.rd != 0 ? insn.rd : 31) : 31;
                 uint32_t call_dest = (insn.id == MIPS_OP_JAL) ? insn.target : ctx->cpu.r[insn.rs];
+                target_addr = call_dest;
                 ctx->cpu.r[ret_reg] = pc + 8;
                 take_branch = true;
-                target_addr = call_dest;
             } else if (insn.is_return) {
                 target_addr = ctx->cpu.r[insn.rs];
                 take_branch = true;
@@ -228,18 +228,32 @@ static void ps1_interpret_fallback(PS1Context* ctx, uint32_t start_pc) {
             }
 
             if (take_branch) {
-                uint32_t off = (target_addr & 0x001FFFFC) >> 2;
-                if (off < PS1_FUNC_TABLE_SIZE && ctx->cpu.func_table[off] != NULL) {
-                    ctx->cpu.pc = target_addr;
-                    ps1_call_indirect(ctx, target_addr);
+                uint32_t masked_target = target_addr & 0x1FFFFFFF;
+                if (masked_target == 0xA0 || masked_target == 0xB0 || masked_target == 0xC0) {
+                    if (masked_target == 0xA0) ps1_bios_handle_a0(ctx, ctx->cpu.r[9]);
+                    else if (masked_target == 0xB0) ps1_bios_handle_b0(ctx, ctx->cpu.r[9]);
+                    else if (masked_target == 0xC0) ps1_bios_handle_c0(ctx, ctx->cpu.r[9]);
                     if (insn.is_call) {
                         pc += 8;
-                        continue;
                     } else {
-                        return;
+                        // Called via JR $t2 (e.g. standard Psy-Q BIOS stub): return to $ra!
+                        if (call_depth == 0) {
+                            ctx->cpu.pc = ctx->cpu.r[31];
+                            return;
+                        }
+                        call_depth--;
+                        pc = ctx->cpu.r[31];
                     }
+                    continue;
                 }
                 if (insn.is_call) {
+                    uint32_t off = (target_addr & 0x001FFFFC) >> 2;
+                    if (off < PS1_FUNC_TABLE_SIZE && ctx->cpu.func_table[off] != NULL) {
+                        ctx->cpu.pc = target_addr;
+                        ps1_call_indirect(ctx, target_addr);
+                        pc += 8;
+                        continue;
+                    }
                     call_depth++;
                 }
                 if (target_addr <= pc) {
