@@ -66,6 +66,8 @@ void ps1_runtime_reset(PS1Context* ctx) {
     ctx->cycle_counter = 0;
     ctx->cycles_since_vblank = 0;
     ctx->start_time_ns = 0;
+    ctx->in_tick = false;
+    ctx->in_irq_callback = false;
     ctx->next_vblank_cycle = (uint64_t)(PS1_CPU_CLOCK_HZ / 59.94);
 }
 
@@ -125,6 +127,25 @@ void ps1_trigger_irq(PS1Context* ctx, uint32_t irq_bit) {
         ctx->cpu.cop0[COP0_CAUSE] |= (1 << 10);
     }
 
+    if (ctx->in_irq_callback) {
+        // Inside an interrupt callback already: only deliver BIOS events (non-reentrant)
+        if (irq_bit & IRQ_CDROM) {
+            if (ctx->cdrom.irq_flag == 2 || ctx->cdrom.irq_flag == 3) {
+                ps1_bios_deliver_event(ctx, 0xF0000003, 0x0020);
+            } else if (ctx->cdrom.irq_flag == 1) {
+                ps1_bios_deliver_event(ctx, 0xF0000003, 0x0010);
+            } else if (ctx->cdrom.irq_flag == 5) {
+                ps1_bios_deliver_event(ctx, 0xF0000003, 0x0040);
+            }
+            ps1_bios_deliver_event(ctx, 0xF0000003, 0x0000);
+        }
+        if (irq_bit & IRQ_TIMER2) {
+            ps1_bios_deliver_event(ctx, 0xF2000002, 0x0001);
+            ps1_bios_deliver_event(ctx, 0xF2000002, 0x0002);
+        }
+        return;
+    }
+
     // Deliver to SysEnqIntRP queues (registered via C0:02)
     for (int p = 0; p < 4; p++) {
         uint32_t cur = ctx->bios.intrp_heads[p];
@@ -138,7 +159,14 @@ void ps1_trigger_irq(PS1Context* ctx, uint32_t irq_bit) {
                 uint32_t saved_lo = ctx->cpu.lo;
                 memcpy(saved_r, ctx->cpu.r, sizeof(saved_r));
 
+                bool prev_in_tick = ctx->in_tick;
+                ctx->in_tick = false;
+                ctx->in_irq_callback = true;
+
                 ps1_call_indirect(ctx, func);
+
+                ctx->in_irq_callback = false;
+                ctx->in_tick = prev_in_tick;
 
                 memcpy(ctx->cpu.r, saved_r, sizeof(saved_r));
                 ctx->cpu.pc = saved_pc;
@@ -161,7 +189,14 @@ void ps1_trigger_irq(PS1Context* ctx, uint32_t irq_bit) {
                     uint32_t saved_lo = ctx->cpu.lo;
                     memcpy(saved_r, ctx->cpu.r, sizeof(saved_r));
 
+                    bool prev_in_tick = ctx->in_tick;
+                    ctx->in_tick = false;
+                    ctx->in_irq_callback = true;
+
                     ps1_call_indirect(ctx, cb_func);
+
+                    ctx->in_irq_callback = false;
+                    ctx->in_tick = prev_in_tick;
 
                     memcpy(ctx->cpu.r, saved_r, sizeof(saved_r));
                     ctx->cpu.pc = saved_pc;
@@ -223,7 +258,7 @@ void ps1_cpu_tick(PS1Context* ctx, uint32_t cycles) {
     uint64_t target_cycles = (now_ns - ctx->start_time_ns) * PS1_CPU_CLOCK_HZ / 1000000000ULL;
     if (target_cycles > ctx->cycle_counter) {
         uint64_t delta = target_cycles - ctx->cycle_counter;
-        const uint64_t MAX_DELTA = PS1_CYCLES_PER_FRAME * 2;
+        const uint64_t MAX_DELTA = PS1_CYCLES_PER_FRAME * 6;
         if (delta > MAX_DELTA) {
             ctx->start_time_ns = now_ns - (ctx->cycle_counter + MAX_DELTA) * 1000000000ULL / PS1_CPU_CLOCK_HZ;
             delta = MAX_DELTA;

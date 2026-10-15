@@ -6,7 +6,7 @@
 #define AUDIO_BUFFER_SIZE 512 // Reduced to 512 frames (~11.6ms) for lowest latency
 #define AUDIO_RING_CAPACITY 16384 // frames (stereo)
 #define AUDIO_RING_MASK (AUDIO_RING_CAPACITY - 1)
-#define AUDIO_MAX_LATENCY_FRAMES 2940 // ~4 video frames at 44.1kHz (~66.6ms)
+#define AUDIO_MAX_LATENCY_FRAMES 4410 // ~6 video frames at 44.1kHz (~100ms headroom)
 
 typedef struct {
     int16_t buffer[AUDIO_RING_CAPACITY * 2]; // 16384 stereo frames (L, R)
@@ -34,15 +34,8 @@ static inline void audio_ring_push(AudioRingBuffer* ring, const int16_t* src, in
     size_t w = atomic_load_explicit(&ring->write_idx, memory_order_relaxed);
     size_t r = atomic_load_explicit(&ring->read_idx, memory_order_acquire);
 
-    // If queue has grown beyond ~4 frames of video (~2940 frames), discard oldest excess
     size_t occupied = (w >= r) ? (w - r) : 0;
-    if (occupied > AUDIO_MAX_LATENCY_FRAMES) {
-        size_t excess = occupied - AUDIO_MAX_LATENCY_FRAMES;
-        r += excess;
-        atomic_store_explicit(&ring->read_idx, r, memory_order_release);
-    }
-
-    size_t space = AUDIO_RING_CAPACITY - occupied;
+    size_t space = (AUDIO_RING_CAPACITY > occupied) ? (AUDIO_RING_CAPACITY - occupied) : 0;
     if ((size_t)count > space) {
         count = (int)space;
     }
@@ -61,6 +54,7 @@ static inline int audio_ring_pop(AudioRingBuffer* ring, int16_t* dst, int count)
     size_t w = atomic_load_explicit(&ring->write_idx, memory_order_acquire);
 
     size_t available = (w >= r) ? (w - r) : 0;
+    // Consumer solely adjusts read_idx to discard excess if producer gets too far ahead
     if (available > AUDIO_MAX_LATENCY_FRAMES) {
         size_t drop = available - AUDIO_MAX_LATENCY_FRAMES;
         r += drop;
@@ -77,8 +71,8 @@ static inline int audio_ring_pop(AudioRingBuffer* ring, int16_t* dst, int count)
     if (to_read > 0) {
         ring->last_sample_l = dst[(to_read - 1) * 2 + 0];
         ring->last_sample_r = dst[(to_read - 1) * 2 + 1];
-        atomic_store_explicit(&ring->read_idx, r + to_read, memory_order_release);
     }
+    atomic_store_explicit(&ring->read_idx, r + to_read, memory_order_release);
 
     return to_read;
 }
