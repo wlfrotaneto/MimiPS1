@@ -162,6 +162,10 @@ static const char* metal_shader_src =
                 crop_bottom = disp_h - active_h - crop_top;
             }
         }
+        if (disp_h >= 240) {
+            if (crop_top < 8) crop_top = 8;
+            if (crop_bottom < 8) crop_bottom = 8;
+        }
 
         simd_float4 uv_bounds = simd_make_float4(
             (float)disp_x / (float)PS1_VRAM_WIDTH,

@@ -46,9 +46,7 @@ MipsProgram* mips_analyze_program(const PS1Executable* exe) {
         uint32_t raw = words[i];
         MipsInsn insn;
         mips_decode_instruction(raw, cur_pc, &insn);
-        if (insn.is_branch && insn.target > cur_pc && insn.target > max_forward_target) {
-            max_forward_target = insn.target;
-        } else if (insn.id == MIPS_OP_J && insn.target > cur_pc && insn.target < (cur_pc + 0x4000)) {
+        if (insn.is_branch && !insn.is_call && insn.target > cur_pc && insn.target < (cur_pc + 0x0400)) {
             if (insn.target > max_forward_target) {
                 max_forward_target = insn.target;
             }

@@ -99,7 +99,10 @@ static void handle_cdrom_command(PS1Context* ctx, uint8_t cmd) {
             break;
         case 0x06: // ReadN
         case 0x1B: // ReadS
+            cd->status &= ~CD_STAT_SEEK_BIT;
             cd->status |= CD_STAT_READ_BIT;
+            cd->seeking = false;
+            cd->pending_int2 = false;
             cd->reading = true;
             cd->read_cycles = 0;
             PS1_LOG(2, "[CDROM] ReadN started at LBA %u (mode=0x%02X)\n", cd->current_lba, cd->mode);
@@ -261,7 +264,7 @@ void ps1_cdrom_tick(PS1Context* ctx, uint32_t cycles) {
 
         cd->read_cycles += cycles;
         // Pacing for static recompilation (~1000-2000 branch loops per sector)
-        uint32_t sector_period = (cd->mode & 0x80) ? 4096 : 8192;
+        uint32_t sector_period = (cd->mode & 0x80) ? 2048 : 4096;
 
         if (cd->read_cycles >= sector_period) {
             cd->read_cycles -= sector_period;
