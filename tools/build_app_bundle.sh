@@ -8,6 +8,7 @@ OUTPUT_DIR="${3:-build}"
 DISC_PATH="${4:-}"
 BOOT_EXE="${5:-}"
 BIOS_PATH="${6:-}"
+ICON_PATH="${7:-}"
 
 APP_BUNDLE="${OUTPUT_DIR}/${APP_NAME}.app"
 MACOS_DIR="${APP_BUNDLE}/Contents/MacOS"
@@ -41,9 +42,17 @@ fi
 
 # Embed AppIcon if available
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ICON_SRC="${SCRIPT_DIR}/../assets/AppIcon.icns"
-if [ -f "${ICON_SRC}" ]; then
-    echo "==> Embedding AppIcon.icns into App Resources"
+ICON_SRC=""
+if [ -n "${ICON_PATH}" ] && [ -f "${ICON_PATH}" ]; then
+    ICON_SRC="${ICON_PATH}"
+elif [ -f "${SCRIPT_DIR}/../assets/${APP_NAME}.icns" ]; then
+    ICON_SRC="${SCRIPT_DIR}/../assets/${APP_NAME}.icns"
+elif [ -f "${SCRIPT_DIR}/../assets/AppIcon.icns" ]; then
+    ICON_SRC="${SCRIPT_DIR}/../assets/AppIcon.icns"
+fi
+
+if [ -n "${ICON_SRC}" ] && [ -f "${ICON_SRC}" ]; then
+    echo "==> Embedding AppIcon.icns into App Resources: $(basename "${ICON_SRC}")"
     cp "${ICON_SRC}" "${RESOURCES_DIR}/AppIcon.icns"
 fi
 
