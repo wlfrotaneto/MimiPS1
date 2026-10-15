@@ -67,6 +67,8 @@ void ps1_runtime_reset(PS1Context* ctx) {
     ctx->cycles_since_vblank = 0;
     ctx->start_time_ns = 0;
     ctx->in_tick = false;
+    ctx->in_irq_callback = false;
+    ctx->pending_irq_bits = 0;
     ctx->next_vblank_cycle = (uint64_t)(PS1_CPU_CLOCK_HZ / 59.94);
 }
 
@@ -127,6 +129,7 @@ void ps1_trigger_irq(PS1Context* ctx, uint32_t irq_bit) {
     }
 
     if (ctx->in_irq_callback) {
+        ctx->pending_irq_bits |= irq_bit;
         // Non-reentrant: mark events as triggered without invoking nested C callbacks
         for (int i = 0; i < PS1_MAX_EVENTS; i++) {
             if (ctx->bios.events[i].is_open && ctx->bios.events[i].enabled) {
@@ -163,10 +166,15 @@ void ps1_trigger_irq(PS1Context* ctx, uint32_t irq_bit) {
                     ctx->cpu.r[29] = 0x801FFF00; // Safe dedicated interrupt stack
                 }
 
+                bool prev_in_tick = ctx->in_tick;
                 bool prev_irq = ctx->in_irq_callback;
+                ctx->in_tick = false;
                 ctx->in_irq_callback = true;
+
                 ps1_call_indirect(ctx, func);
+
                 ctx->in_irq_callback = prev_irq;
+                ctx->in_tick = prev_in_tick;
 
                 memcpy(ctx->cpu.r, saved_r, sizeof(saved_r));
                 ctx->cpu.pc = saved_pc;
@@ -194,10 +202,15 @@ void ps1_trigger_irq(PS1Context* ctx, uint32_t irq_bit) {
                         ctx->cpu.r[29] = 0x801FFF00; // Safe dedicated interrupt stack
                     }
 
+                    bool prev_in_tick = ctx->in_tick;
                     bool prev_irq = ctx->in_irq_callback;
+                    ctx->in_tick = false;
                     ctx->in_irq_callback = true;
+
                     ps1_call_indirect(ctx, cb_func);
+
                     ctx->in_irq_callback = prev_irq;
+                    ctx->in_tick = prev_in_tick;
 
                     memcpy(ctx->cpu.r, saved_r, sizeof(saved_r));
                     ctx->cpu.pc = saved_pc;
@@ -242,6 +255,12 @@ void ps1_trigger_irq(PS1Context* ctx, uint32_t irq_bit) {
     }
     if (irq_bit & IRQ_DMA) {
         ps1_bios_deliver_event(ctx, 0xF0000002, 0x0001); // DMA Complete event
+    }
+
+    while (ctx->pending_irq_bits != 0 && !ctx->in_irq_callback) {
+        uint32_t next_irqs = ctx->pending_irq_bits;
+        ctx->pending_irq_bits = 0;
+        ps1_trigger_irq(ctx, next_irqs);
     }
 }
 

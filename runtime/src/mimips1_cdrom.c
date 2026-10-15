@@ -261,7 +261,7 @@ void ps1_cdrom_tick(PS1Context* ctx, uint32_t cycles) {
 
         cd->read_cycles += cycles;
         // Pacing for static recompilation (~1000-2000 branch loops per sector)
-        uint32_t sector_period = (cd->mode & 0x80) ? 32768 : 65536;
+        uint32_t sector_period = (cd->mode & 0x80) ? 4096 : 8192;
 
         if (cd->read_cycles >= sector_period) {
             cd->read_cycles -= sector_period;
@@ -360,11 +360,6 @@ void ps1_cdrom_write(PS1Context* ctx, uint32_t addr, uint8_t val) {
             } else if (cd->reg_index == 1 || cd->reg_index == 3) {
                 // Acknowledge IRQ bits (0x1F801803.1 / 0x1F801803.3)
                 cd->irq_flag &= ~(val & 0x1F);
-                if (cd->irq_flag == 0) {
-                    cd->response_count = 0;
-                    cd->response_read_pos = 0;
-                    cd->read_cycles = 0;
-                }
                 if (val & 0x40) {
                     cd->param_count = 0; // Reset parameter FIFO
                 }

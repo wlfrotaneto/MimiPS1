@@ -127,20 +127,36 @@ void ps1_dma_execute(PS1Context* ctx, int channel_idx) {
     }
     // CD-ROM DMA Channel (3)
     else if (channel_idx == DMA_CDROM) {
+        if (ctx->cdrom.data_bytes_avail < 4 && ctx->cdrom.reading && ctx->cdrom.image_file) {
+            bool subheader_mode = (ctx->cdrom.mode & 0x20) != 0;
+            uint32_t sec_offset = (ctx->cdrom.is_raw ? (subheader_mode ? 12 : 24) : 0);
+            uint32_t sec_size = subheader_mode ? (ctx->cdrom.is_raw ? 2340 : 2048) : CDROM_SECTOR_SIZE_DATA;
+            long offset = (long)ctx->cdrom.current_lba * ctx->cdrom.sector_size + sec_offset;
+            fseek(ctx->cdrom.image_file, offset, SEEK_SET);
+            size_t r = fread(ctx->cdrom.data_fifo, 1, sec_size, ctx->cdrom.image_file);
+            if (r > 0) {
+                ctx->cdrom.data_bytes_avail = (int)r;
+                ctx->cdrom.data_read_pos = 0;
+                ctx->cdrom.current_lba++;
+            }
+        }
         uint32_t count = (ch->bcr & 0xFFFF) * (ch->bcr >> 16 ? (ch->bcr >> 16) : 1);
+        if (count == 0) count = 0x800 / 4; // Hardware quirk: BCR=0 transfers 0x800 bytes
         uint32_t addr = ch->madr & 0x1FFFFC;
-        PS1_LOG(2, "[DMA3] madr=0x%08X count=%u avail=%d pos=%d\n", addr, count, ctx->cdrom.data_bytes_avail, ctx->cdrom.data_read_pos);
+        uint32_t exe_start = (ctx->exe_text_addr ? (ctx->exe_text_addr & 0x1FFFFF) : 0x10000);
+        uint32_t exe_end = exe_start + (ctx->exe_text_size ? ctx->exe_text_size : 0x50000);
         for (uint32_t i = 0; i < count && addr < PS1_RAM_SIZE; i++) {
             if (ctx->cdrom.data_bytes_avail >= 4) {
                 uint32_t w = *(uint32_t*)&ctx->cdrom.data_fifo[ctx->cdrom.data_read_pos];
                 ctx->cdrom.data_read_pos += 4;
                 ctx->cdrom.data_bytes_avail -= 4;
                 *(uint32_t*)&ctx->memory.ram[addr] = w;
-                uint32_t fn_idx = addr >> 2;
-                if (fn_idx < PS1_FUNC_TABLE_SIZE) {
-                    ctx->cpu.func_table[fn_idx] = NULL;
+                if (addr < exe_start || addr >= exe_end) {
+                    uint32_t fn_idx = addr >> 2;
+                    if (fn_idx < PS1_FUNC_TABLE_SIZE) {
+                        ctx->cpu.func_table[fn_idx] = NULL;
+                    }
                 }
-                if (i == 0) PS1_LOG(2, "[DMA3 First Word] 0x%08X\n", w);
             }
             addr += 4;
         }

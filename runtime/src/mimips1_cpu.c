@@ -162,10 +162,6 @@ static void ps1_interpret_fallback(PS1Context* ctx, uint32_t start_pc) {
     while (pc != 0 && (pc & 0x1FFFFFFF) < PS1_RAM_SIZE) {
         if (++insn_count % 64 == 0) {
             ps1_cpu_tick(ctx, 32);
-            if (insn_count > 10000000) {
-                fprintf(stderr, "[INTERP] Safety limit exceeded at 0x%08X (RA=0x%08X)\n", pc, ctx->cpu.r[31]);
-                break;
-            }
         }
 
         uint32_t raw = ps1_mem_read32(ctx, pc);
@@ -255,6 +251,13 @@ static void ps1_interpret_fallback(PS1Context* ctx, uint32_t start_pc) {
                         continue;
                     }
                     call_depth++;
+                } else if ((insn.id == MIPS_OP_J || insn.id == MIPS_OP_JR) && call_depth == 0) {
+                    uint32_t off = (target_addr & 0x001FFFFC) >> 2;
+                    if (off < PS1_FUNC_TABLE_SIZE && ctx->cpu.func_table[off] != NULL) {
+                        ctx->cpu.pc = target_addr;
+                        ps1_call_indirect(ctx, target_addr);
+                        return;
+                    }
                 }
                 if (target_addr <= pc) {
                     ps1_cpu_tick(ctx, 32);

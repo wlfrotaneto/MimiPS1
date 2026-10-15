@@ -56,6 +56,7 @@ struct PS1Context {
     uint32_t    cycles_since_vblank;
     bool        in_tick;
     bool        in_irq_callback;
+    uint32_t    pending_irq_bits;
     uint64_t    start_time_ns;
     uint64_t    next_vblank_cycle;
 

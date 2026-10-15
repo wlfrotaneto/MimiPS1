@@ -469,10 +469,15 @@ void ps1_bios_deliver_event(PS1Context* ctx, uint32_t class_id, uint32_t spec) {
                     ctx->cpu.r[29] = 0x801FFF00; // Safe dedicated interrupt stack
                 }
 
+                bool prev_in_tick = ctx->in_tick;
                 bool prev_irq = ctx->in_irq_callback;
+                ctx->in_tick = false;
                 ctx->in_irq_callback = true;
+
                 ps1_call_indirect(ctx, ctx->bios.events[i].func);
+
                 ctx->in_irq_callback = prev_irq;
+                ctx->in_tick = prev_in_tick;
 
                 memcpy(ctx->cpu.r, saved_r, sizeof(saved_r));
                 ctx->cpu.pc = saved_pc;

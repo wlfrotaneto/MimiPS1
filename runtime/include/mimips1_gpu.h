@@ -69,6 +69,8 @@ struct PS1GPU {
     uint16_t clut_x, clut_y;
     bool     tex_disable;
     bool     dither_enable;
+    uint8_t  tex_win_mask_x, tex_win_mask_y;
+    uint8_t  tex_win_off_x, tex_win_off_y;
 
     // Display Area
     int16_t  disp_x, disp_y;

@@ -150,6 +150,11 @@ static void blend_pixel(PS1GPU* gpu, uint16_t* dst, uint8_t fr, uint8_t fg, uint
 }
 
 uint16_t ps1_gpu_sample_texture(PS1GPU* gpu, int u, int v) {
+    u = (u & 0xFF);
+    v = (v & 0xFF);
+    u = (u & ~(gpu->tex_win_mask_x * 8)) | ((gpu->tex_win_off_x & gpu->tex_win_mask_x) * 8);
+    v = (v & ~(gpu->tex_win_mask_y * 8)) | ((gpu->tex_win_off_y & gpu->tex_win_mask_y) * 8);
+
     int tex_x = (gpu->tex_page_x * 64) + (u & 0xFF);
     int tex_y = (gpu->tex_page_y * 256) + (v & 0xFF);
 
@@ -559,6 +564,11 @@ static void execute_gp0_packet(PS1GPU* gpu) {
 
     // Texture Window Setting
     if (op == 0xE2) {
+        uint32_t val = gpu->gp0_fifo[0];
+        gpu->tex_win_mask_x = (uint8_t)(val & 0x1F);
+        gpu->tex_win_mask_y = (uint8_t)((val >> 5) & 0x1F);
+        gpu->tex_win_off_x  = (uint8_t)((val >> 10) & 0x1F);
+        gpu->tex_win_off_y  = (uint8_t)((val >> 15) & 0x1F);
         return;
     }
 
@@ -719,13 +729,11 @@ void ps1_gpu_write_gp1(PS1GPU* gpu, uint32_t val) {
 }
 
 void ps1_gpu_vblank(PS1GPU* gpu) {
-    if (gpu->front_disp_w == 0) {
-        memcpy(gpu->front_vram, gpu->vram, sizeof(gpu->vram));
-        gpu->front_disp_x = gpu->disp_x;
-        gpu->front_disp_y = gpu->disp_y;
-        gpu->front_disp_w = gpu->disp_w;
-        gpu->front_disp_h = gpu->disp_h;
-    }
+    memcpy(gpu->front_vram, gpu->vram, sizeof(gpu->vram));
+    gpu->front_disp_x = gpu->disp_x;
+    gpu->front_disp_y = gpu->disp_y;
+    gpu->front_disp_w = gpu->disp_w;
+    gpu->front_disp_h = gpu->disp_h;
 
     check_gp0_stats_env();
     if (!s_gp0_stats_enabled) return;
