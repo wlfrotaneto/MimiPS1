@@ -75,9 +75,6 @@ MipsProgram* mips_analyze_program(const PS1Executable* exe) {
                     preceded_by_terminator = true;
                 }
             }
-            if (i >= 1 && words[i - 1] == 0) {
-                preceded_by_terminator = true; // NOP padding before function
-            }
             if (preceded_by_terminator) {
                 add_discovered_entry(discovered_entries, &entry_count, cur_pc);
             }
@@ -103,9 +100,9 @@ MipsProgram* mips_analyze_program(const PS1Executable* exe) {
     for (int i = 0; i < entry_count; i++) {
         uint32_t start_pc = discovered_entries[i];
         uint32_t next_func_pc = (i + 1 < entry_count) ? discovered_entries[i + 1] : (exe->text_dest_addr + exe->text_size);
-        // Safety cap: never allow a single function to exceed 2048 instructions (8KB)
-        if (next_func_pc > (start_pc + 2048 * 4)) {
-            next_func_pc = start_pc + 2048 * 4;
+        // Safety cap: never allow a single function to exceed 32768 instructions (128KB)
+        if (next_func_pc > (start_pc + 32768 * 4)) {
+            next_func_pc = start_pc + 32768 * 4;
         }
 
         MipsFunction* fn = (MipsFunction*)calloc(1, sizeof(MipsFunction));

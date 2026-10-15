@@ -241,6 +241,8 @@ bool mips_emit_c_code(const MipsProgram* prog, const EmitterOptions* opts) {
         // into the dispatch switch. ps1_call_indirect sets cpu.pc right before the call.
         fprintf(fc, "static void %s_impl(PS1Context* ctx, int _mid_entry) {\n", fn->name);
         fprintf(fc, "    bool _take_branch = false;\n");
+        fprintf(fc, "    uint32_t _call_target = 0;\n");
+        fprintf(fc, "    uint32_t _jr_target = 0;\n");
         fprintf(fc, "    if (_mid_entry) goto dispatch_entry;\n");
 
         MipsBlock* blk = fn->first_block;
@@ -315,6 +317,9 @@ bool mips_emit_c_code(const MipsProgram* prog, const EmitterOptions* opts) {
                 // Function calls (JAL, JALR)
                 else if (br->is_call) {
                     uint32_t ret_reg = (br->id == MIPS_OP_JALR) ? (br->rd != 0 ? br->rd : 31) : 31;
+                    if (br->id == MIPS_OP_JALR) {
+                        fprintf(fc, "    _call_target = R(%u);\n", br->rs);
+                    }
                     fprintf(fc, "    R(%u) = 0x%08X;\n", ret_reg, br->pc + 8);
                     fprintf(fc, "loc_%08x:\n", ds->pc);
                     emit_instruction_c(fc, ds); // Execute delay slot
@@ -325,7 +330,7 @@ bool mips_emit_c_code(const MipsProgram* prog, const EmitterOptions* opts) {
                             fprintf(fc, "    CALL_INDIRECT(0x%08X);\n", br->target);
                         }
                     } else {
-                        fprintf(fc, "    CALL_INDIRECT(R(%u));\n", br->rs);
+                        fprintf(fc, "    CALL_INDIRECT(_call_target);\n");
                     }
                 }
                 // Return (JR $ra)
@@ -349,9 +354,10 @@ bool mips_emit_c_code(const MipsProgram* prog, const EmitterOptions* opts) {
                 }
                 // Indirect Jump (JR $reg, e.g. switch jump tables)
                 else if (br->id == MIPS_OP_JR) {
+                    fprintf(fc, "    _jr_target = R(%u);\n", br->rs);
                     fprintf(fc, "loc_%08x:\n", ds->pc);
                     emit_instruction_c(fc, ds);
-                    fprintf(fc, "    ctx->cpu.pc = R(%u);\n", br->rs);
+                    fprintf(fc, "    ctx->cpu.pc = _jr_target;\n");
                     fprintf(fc, "    goto dispatch_entry;\n");
                 }
             }
