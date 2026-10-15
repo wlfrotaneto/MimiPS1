@@ -22,7 +22,7 @@ Following the modern wave of static recompilation architectures (such as *N64Rec
 
 ```
 ┌─────────────────────────────────┐
-│  Original PS1 Disc / Binary     │ (SCUS_*.00, .EXE, .BIN, .ISO)
+│  Original PS1 Disc / Binary     │ (SCUS_*.00, .EXE, .BIN, .ISO, .CUE)
 └────────────────┬────────────────┘
                  │
                  ▼
@@ -32,7 +32,7 @@ Following the modern wave of static recompilation architectures (such as *N64Rec
                  │
                  ▼
 ┌─────────────────────────────────┐
-│    Structured C99 Generation    │ (Delay slot resolution & branch folding)
+│    Structured C99 Generation    │ (Delay slot resolution, branch folding & GTE)
 └────────────────┬────────────────┘
                  │
                  ▼
@@ -42,7 +42,7 @@ Following the modern wave of static recompilation architectures (such as *N64Rec
                  │
                  ▼
 ┌─────────────────────────────────┐
-│   Native macOS App Bundle       │ (Metal MSL + CoreAudio + GameController)
+│   Native macOS App Bundle       │ (Metal MSL + CoreAudio + GameController + Auto-Icon)
 │   Distributed as Compressed DMG │
 └─────────────────────────────────┘
 ```
@@ -58,35 +58,50 @@ Following the modern wave of static recompilation architectures (such as *N64Rec
 | **Execution Model** | Dynamic translation in memory (JIT cache & page faults) | **Ahead-of-Time compiled directly to native ARM64** |
 | **CPU Overhead** | 5%–25% (JIT translation cache management & dispatch loops) | **< 0.5% CPU utilization** (Direct Mach-O execution) |
 | **Input Latency** | 1–3 frame latency due to interpreter frame queues | **Sub-millisecond instant response** |
-| **Distribution** | Requires external emulator app, BIOS dumps, & separate ROM files | **Single standalone `.dmg` installer** |
+| **Distribution** | Requires external emulator app, BIOS dumps, & separate ROM files | **Single standalone `.app` and `.dmg` installer** |
+| **Game Icons** | Generic or non-existent in OS file manager | **Auto-extracted PS1 Memory Card pixel art or official HD Boxart** |
 | **External Dependencies**| Heavy external dependencies (SDL2, Qt, third-party DLLs) | **Zero external dependencies** (Pure Cocoa, Metal & CoreAudio) |
 
 ### 🛠️ Subsystems Architecture
 
 * **MIPS R3000A Recompiler (`recompiler/`):**
   * Instruction decoder handling complete MIPS-I instruction set, Coprocessor 0/2 operations, and delay slot semantics.
-  * Recursive function entry-point analysis and basic block boundary reconstruction.
+  * Recursive function entry-point analysis and basic block boundary reconstruction with configurable CFG safety limits.
+  * Preserves out-of-function conditional calls (`BLTZAL`, `BGEZAL`) without corrupting return control flow.
   * Register mapping with direct virtual register assignments optimized for Clang register allocators.
 
-* **Metal MSL Graphics Pipeline (`runtime/src/platform/macos_metal.m`):**
+* **Geometry Transformation Engine (GTE) (`runtime/src/mimips1_gte.c`):**
+  * Cycle-accurate vector transformations (`RTPT`, `RTPS`, `MVMVA`, `NCLIP`, `AVSZ3`, `AVSZ4`).
+  * Fixed-point 12-bit vector pipeline with dedicated hardware accuracy test suite (`tests/gte_test.c`).
+
+* **Metal MSL Graphics Pipeline (`runtime/src/platform/macos_metal.m` & `runtime/src/mimips1_gpu.c`):**
   * Emulates the 1024×512 PlayStation 1 VRAM directly mapped to native Metal textures.
-  * Custom Metal Shading Language (MSL) shaders handle aspect ratio correction, dynamic resolution scaling, and high-DPI Retina rasterization.
+  * Full GPU command execution (`GP0` polygon rendering, line drawing, sprites/rectangles, texture sampling, CLUT palettes).
+  * Color modulation with saturation safeguards (`(r * tr) >> 7`) and drop shadow rendering (`(0, 0, 0)` vertex modulations).
+  * Texture window wrapping (`GP0(0xE2)`), 240p/480i overscan clipping, and VRAM-to-VRAM copy masking (`GP0(0x80..0x9F)`).
   * Native 60 FPS synchronization aligned to macOS display refresh cycles (ProMotion ready).
 
-* **CoreAudio SPU Synthesis (`runtime/src/platform/macos_audio.m`):**
+* **CoreAudio SPU Synthesis (`runtime/src/platform/macos_audio.m` & `runtime/src/mimips1_spu.c`):**
   * 24-channel audio synthesizer with low-latency `AudioQueue` streaming.
-  * Native sample rate conversion and mixer buffering without third-party audio abstractions.
+  * ADPCM voice decoding and mixer buffering without third-party audio abstractions.
 
-* **CD-ROM Engine (`runtime/src/mimips1_cdrom.c`):**
-  * Dual-format sector engine handling standard 2048-byte ISO sectors and raw 2352-byte disc images (Mode 2 Form 1 with sync pattern detection).
-  * Direct DMA 3 data streaming and ISO9660 volume descriptor parser.
+* **CD-ROM & DMA Controller (`runtime/src/mimips1_cdrom.c` & `runtime/src/mimips1_dma.c`):**
+  * Dual-format sector engine handling standard 2048-byte ISO sectors and raw 2352-byte disc images (Mode 2 Form 1).
+  * Paced sector delivery (`16384` cycles) with in-flight sector protection to prevent corruption of 64KB `.NSF` streaming chunks.
+  * Exact `GetlocL` (0x10) and `GetlocP` (0x11) position tracking via `last_read_lba`.
+  * Multi-channel DMA transfers (GPU Linked-List Mode, CD-ROM DMA3 streaming with fallback).
 
-* **High-Level BIOS Engine (`runtime/src/mimips1_bios.c`):**
-  * HLE implementation of critical Sony kernel syscall tables (`A0`, `B0`, `C0`).
-  * Eliminates the legal and logistical barrier of requiring proprietary PS1 BIOS dumps.
+* **Official BIOS & HLE Dual Support (`runtime/src/mimips1_bios.c`):**
+  * Automatic detection and execution of official PlayStation BIOS (`assets/bios.bin`).
+  * Built-in HLE fallback for critical Sony kernel syscall tables (`A0`, `B0`, `C0`).
 
-* **Controller Input (`runtime/src/platform/macos_main.m`):**
-  * Native Apple `GameController` framework integration with automatic mapping for PlayStation DualSense (PS5), DualShock 4, Xbox Wireless, and Nintendo Switch controllers.
+* **Memory Card Manager (`runtime/src/mimips1_card.c`):**
+  * Dual 128KB memory card persistence in `~/Library/Application Support/MimiPS1/memcards/`.
+
+* **Automated Game Icon Pipeline (`tools/mimips1_pipeline.py`):**
+  * **Tier 1:** Native disc extraction of PS1 Memory Card icons (`*ICON*.TIM`) with 16-color CLUT decoding and nearest-neighbor pixel art scaling.
+  * **Tier 2:** Automatic online retrieval of official high-resolution boxart (512×512 / 1024×1024) via Libretro/GameTDB repositories.
+  * **Tier 3:** Built-in conversion via macOS `sips` and `iconutil` directly into standalone `.icns` application icons.
 
 ---
 
@@ -96,17 +111,23 @@ Following the modern wave of static recompilation architectures (such as *N64Rec
 MimiPS1/
 ├── CMakeLists.txt                # Root CMake build configuration
 ├── Makefile                      # Convenient CLI automation targets
+├── assets/                       # Embedded runtime assets, BIOS and icon cache
+│   ├── bios.bin                  # Official 512KB PS1 BIOS image (auto-detected)
+│   ├── AppIcon.icns              # Generic controller fallback icon
+│   └── icons/                    # Auto-generated & cached game-specific .icns icons
 ├── recompiler/                   # Ahead-of-Time Static Recompiler engine
 │   ├── include/                  # MIPS disassembly, CFG analysis & C emitter headers
 │   └── src/                      # Disassembler, CFG recovery and C transpiler
 ├── runtime/                      # Native macOS / Apple Silicon runtime engine
-│   ├── include/                  # Subsystem interfaces (GPU, GTE, SPU, CD-ROM, BIOS)
+│   ├── include/                  # Subsystem interfaces (GPU, GTE, SPU, CD-ROM, BIOS, Card)
 │   └── src/
 │       ├── platform/             # Metal shaders, CoreAudio driver, Cocoa windowing
 │       └── mimips1_*.c           # Memory bus, DMA, timers, and CPU register state
+├── tests/                        # Accuracy test suites
+│   └── gte_test.c                # GTE hardware accuracy validation suite
 ├── tools/                        # Automation & deployment pipelines
-│   ├── mimips1_pipeline.py       # End-to-end recompilation & packaging pipeline
-│   ├── build_app_bundle.sh       # macOS .app bundle constructor
+│   ├── mimips1_pipeline.py       # Zero-configuration end-to-end recompilation pipeline
+│   ├── build_app_bundle.sh       # macOS .app bundle constructor with icon integration
 │   └── package_dmg.sh            # Compressed UDZO .dmg packaging utility
 └── samples/                      # Validation test suites and homebrew samples
     └── cube_demo/                # Standalone PS-X test ROM with 3D geometry
@@ -125,79 +146,100 @@ MimiPS1/
 
 ### Building the Toolchain
 
-Clone the repository and build the static recompiler:
+Clone the repository and build the static recompiler and test suite:
 
 ```bash
 git clone https://github.com/wlfrotaneto/MimiPS1.git
 cd MimiPS1
 cmake -B build -S .
-cmake --build build --target mimips1-recomp
+cmake --build build -j
+```
+
+Run the hardware accuracy validation suite:
+
+```bash
+./build/gte_test
 ```
 
 ---
 
 ## Usage
 
-### Complete End-to-End Pipeline
+### Zero-Configuration Recompilation
 
-The automated pipeline handles executable extraction, MIPS disassembly, C code generation, Clang compilation, `.app` bundle construction, and `.dmg` packaging with a single command:
+The pipeline is completely automated. You only need to pass the path to your disc image or executable — the game title, disc embedding, BIOS, and custom icon are resolved automatically:
 
 ```bash
-# Recompile any PS1 executable or disc image (.EXE, .BIN, .ISO)
-python3 tools/mimips1_pipeline.py pipeline path/to/game.bin --name "GameTitle"
+# Recompile any game with a single command:
+python3 tools/mimips1_pipeline.py pipeline "/path/to/Crash Bandicoot [SCUS 94900].bin"
 ```
 
-#### Self-Contained Distribution (Embedding Disc Assets)
+The pipeline will:
+1. Detect and sanitize the game title (e.g., `Crash Bandicoot`).
+2. Detect the BIOS from `assets/bios.bin` or `~/Downloads`.
+3. Extract the boot executable (`SCUS_949.00`).
+4. Recompile MIPS code to C and compile ARM64 native binary with Clang (`-O3 -flto`).
+5. Resolve the game icon (disc extraction or official HD boxart).
+6. Build `build/Crash Bandicoot.app` and `dist/Crash Bandicoot-AppleSilicon.dmg`.
 
-To package a commercial disc image directly inside the resulting macOS app bundle (enabling drag-and-drop distribution without requiring users to supply external ROM files):
+### Useful Command Options
 
 ```bash
-python3 tools/mimips1_pipeline.py pipeline path/to/game.bin --name "GameTitle" --embed-disc
+# Fast build (skips DMG compression):
+python3 tools/mimips1_pipeline.py pipeline "path/to/game.bin" --no-dmg
+
+# Install directly into /Applications:
+python3 tools/mimips1_pipeline.py pipeline "path/to/game.bin" --install
+
+# Custom application name or icon override:
+python3 tools/mimips1_pipeline.py pipeline "path/to/game.bin" --name "MyGame" --icon "cover.png"
 ```
 
-Once the pipeline completes:
-* **Native App:** `build/GameTitle.app`
-* **Distribution DMG:** `dist/GameTitle-AppleSilicon.dmg`
-
-### Running the Sample Demo
-
-To verify your build environment using the included 3D hardware test demo:
+### Launching Recompiled Games
 
 ```bash
-python3 tools/mimips1_pipeline.py pipeline samples/cube_demo/TRIANGLE_DEMO.EXE --name "TriangleDemo"
-open build/TriangleDemo.app
+open "build/Crash Bandicoot.app"
 ```
 
 ---
 
 ## Current Project Status
 
-> [!NOTE]
-> **MimiPS1 is currently in active research & development.**
-
-* **Homebrew & Technical Demos:** Fully functional. Standalone executables such as `TriangleDemo.EXE` recompile cleanly, render in real-time via Metal at 60 FPS, process input, and package into standalone macOS applications.
-* **AOT Static Recompiler:** Functional and robust. Converts MIPS R3000A machine code into clean, optimizable C99, resolves branch delay slots, reconstructs Control Flow Graphs (CFGs), and supports Psy-Q function prologue detection.
-* **Commercial Game Support (WIP / Experimental):** Under active development. Commercial titles utilizing the Psy-Q SDK (such as *Cotton Original* and *Crash Bandicoot*) successfully disassemble, link against the native runtime, boot, and enter their main game loops. However, they are currently subject to synchronization stalls prior to their first display frame swap due to hardware interrupt timing.
-* **Current Focus:** Unifying CPU execution, timers, CD-ROM status events, and hardware IRQs into a single-threaded cycle-synchronized loop (eliminating host-thread race conditions between the Metal presentation layer and the recompiled game loop).
+| Title / Target | Serial | Recompilation | Video / GPU | Audio / SPU | Status |
+| :--- | :--- | :---: | :---: | :---: | :--- |
+| **Triangle Demo (Homebrew)** | N/A | ✅ Clean | ✅ Metal 60 FPS | N/A | **Fully Playable** |
+| **Crash Bandicoot** | `SCUS-94900` | ✅ Clean (817 funcs) | 🟡 Title Screen & 3D Model | 🟡 In progress | **Boots to Title Screen** (3D Crash & logo rendering, FS/memcard inited) |
+| **Cotton Original** | `SLPM-86461` | ✅ Clean (2129 funcs) | 🟡 Black screen / Sync | 🟡 In progress | **Recompiled & Packaged** (Native icon extracted from disc) |
+| **Castlevania: Symphony of the Night** | `SLUS-00067` | ✅ Clean (489 funcs) | 🟡 Black screen / Sync | 🟡 In progress | **Recompiled & Packaged** (CFG recursion capped, HD icon linked) |
 
 ---
 
 ## Technical Roadmap
 
-### Architecture & Synchronization (Active)
-- [x] MIPS-I R3000A instruction decoding & basic block partitioning
-- [x] Function recovery, delay slot resolution, and CFG analysis
+### Implemented & Validated
+- [x] Full MIPS-I R3000A instruction decoding & basic block reconstruction
+- [x] Function discovery, delay slot folding, and CFG analysis
+- [x] Function size safety capping (2048 insns) to prevent Clang recursive parser stack overflows
+- [x] Out-of-function branch-and-link preservation (`BGEZAL`, `BLTZAL`)
+- [x] Full GTE vector coprocessor instruction pipeline with unit test suite
 - [x] Metal hardware-accelerated rasterization & 1024×512 VRAM pipeline
-- [x] CoreAudio SPU streaming engine
-- [x] BIOS HLE support for kernel vector tables (`A0`, `B0` Rev 1/2, `C0`)
+- [x] Texture modulation saturation safeguards (`(r * tr) >> 7`) fixing black drop shadow corruptions
+- [x] Sprite clipping (`clip_x2 + 1`, `clip_y2 + 1`) and UV coordinate wrapping
+- [x] VRAM-to-VRAM copy coordinate masking (`GP0(0x80..0x9F)`)
 - [x] Dual-format disc sector parser (2048-byte ISO & 2352-byte RAW Mode 2 Form 1)
+- [x] CD-ROM pacing & in-flight buffer protection preventing `.NSF` streaming chunk loss
+- [x] Accurate `GetlocL` / `GetlocP` sub-channel positioning via `last_read_lba`
+- [x] Automated game icon pipeline (Disc TIM extraction + Libretro HD Boxart resolver)
+- [x] Zero-configuration pipeline with automatic title & BIOS detection
 - [x] macOS `.app` bundle builder & compressed UDZO `.dmg` packaging
-- [ ] **Single-threaded cycle-budgeted event scheduler:** Move IRQ delivery and timer ticks out of the Metal rendering thread into synchronous execution points within the CPU thread to ensure deterministic Psy-Q driver operation.
-- [ ] Full CD-ROM controller state machine timing (CdlReadN/CdlSeekL sub-response delays)
-- [ ] ADPCM voice ADSR envelope curves & hardware reverberation buffers
 
-### Future Multiplatform Vision
-- [ ] **Windows (x86_64) Platform Backend:** Leverage MimiPS1's pure C11 core with a modular SDL2/SDL3 platform layer (replacing Cocoa/Metal/CoreAudio with DirectX/Vulkan/OpenGL and miniaudio).
+### Active Research & Debugging
+- [ ] VRAM-to-VRAM background DMA copy synchronization for Crash title jungle backdrop
+- [ ] Investigate frame display synchronization on Cotton Original and Castlevania: SotN
+- [ ] ADPCM voice ADSR envelope curves & hardware reverberation buffers
+- [ ] Analog joystick mapping and rumble haptics via GameController framework
+
+---
 
 ## License
 
