@@ -139,6 +139,11 @@ void ps1_trigger_irq(PS1Context* ctx, uint32_t irq_bit) {
                 uint32_t saved_lo = ctx->cpu.lo;
                 memcpy(saved_r, ctx->cpu.r, sizeof(saved_r));
 
+                uint32_t p_sp = ctx->cpu.r[29] & 0x1FFFFFFF;
+                if (p_sp < 0x2000 || p_sp >= PS1_RAM_SIZE) {
+                    ctx->cpu.r[29] = 0x801FFF00; // Safe dedicated interrupt stack
+                }
+
                 ps1_call_indirect(ctx, func);
 
                 memcpy(ctx->cpu.r, saved_r, sizeof(saved_r));
@@ -161,6 +166,11 @@ void ps1_trigger_irq(PS1Context* ctx, uint32_t irq_bit) {
                     uint32_t saved_hi = ctx->cpu.hi;
                     uint32_t saved_lo = ctx->cpu.lo;
                     memcpy(saved_r, ctx->cpu.r, sizeof(saved_r));
+
+                    uint32_t p_sp = ctx->cpu.r[29] & 0x1FFFFFFF;
+                    if (p_sp < 0x2000 || p_sp >= PS1_RAM_SIZE) {
+                        ctx->cpu.r[29] = 0x801FFF00; // Safe dedicated interrupt stack
+                    }
 
                     ps1_call_indirect(ctx, cb_func);
 

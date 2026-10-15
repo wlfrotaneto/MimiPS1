@@ -309,8 +309,12 @@ uint8_t ps1_cdrom_read(PS1Context* ctx, uint32_t addr) {
                 ret = cd->data_fifo[cd->data_read_pos++];
             }
             break;
-        case 3: // Interrupt Flag
-            ret = 0xE0 | (cd->irq_flag & 0x1F);
+        case 3: // 0x1F801803: Index 0/2 = Interrupt Enable, Index 1/3 = Interrupt Flag
+            if (cd->reg_index & 1) {
+                ret = 0xE0 | (cd->irq_flag & 0x1F);
+            } else {
+                ret = 0xE0 | (cd->irq_enable & 0x1F);
+            }
             break;
     }
     return ret;

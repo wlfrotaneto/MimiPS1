@@ -464,6 +464,11 @@ void ps1_bios_deliver_event(PS1Context* ctx, uint32_t class_id, uint32_t spec) {
                 uint32_t saved_lo = ctx->cpu.lo;
                 memcpy(saved_r, ctx->cpu.r, sizeof(saved_r));
 
+                uint32_t p_sp = ctx->cpu.r[29] & 0x1FFFFFFF;
+                if (p_sp < 0x2000 || p_sp >= PS1_RAM_SIZE) {
+                    ctx->cpu.r[29] = 0x801FFF00; // Safe dedicated interrupt stack
+                }
+
                 ps1_call_indirect(ctx, ctx->bios.events[i].func);
 
                 memcpy(ctx->cpu.r, saved_r, sizeof(saved_r));

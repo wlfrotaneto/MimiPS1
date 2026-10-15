@@ -37,6 +37,7 @@ add_library(mimips1-runtime STATIC
     runtime/src/mimips1_input.c
     runtime/src/mimips1_card.c
     runtime/src/mimips1_runtime.c
+    recompiler/src/mips_disasm.c
     runtime/src/platform/macos_metal.m
     runtime/src/platform/macos_audio.m
     runtime/src/platform/macos_main.m

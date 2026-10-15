@@ -37,6 +37,23 @@ MipsProgram* mips_analyze_program(const PS1Executable* exe) {
     uint32_t num_insns = exe->text_size / 4;
     const uint32_t* words = (const uint32_t*)exe->code_buffer;
 
+    // Precompute forward branch reach: any instruction spanned by an intra-function
+    // forward branch cannot be an independent function entry point.
+    uint32_t max_forward_target = 0;
+    bool* is_spanned = (bool*)calloc(num_insns, sizeof(bool));
+    for (uint32_t i = 0; i < num_insns; i++) {
+        uint32_t cur_pc = exe->text_dest_addr + (i * 4);
+        uint32_t raw = words[i];
+        MipsInsn insn;
+        mips_decode_instruction(raw, cur_pc, &insn);
+        if (insn.is_branch && insn.target > max_forward_target) {
+            max_forward_target = insn.target;
+        }
+        if (max_forward_target > cur_pc) {
+            is_spanned[i] = true;
+        }
+    }
+
     // First pass: Discover all JAL call targets and standard function prologues
     for (uint32_t i = 0; i < num_insns; i++) {
         uint32_t cur_pc = exe->text_dest_addr + (i * 4);
@@ -49,24 +66,24 @@ MipsProgram* mips_analyze_program(const PS1Executable* exe) {
                 add_discovered_entry(discovered_entries, &entry_count, insn.target);
             }
         }
-        // After a function return (JR $ra + delay slot) or jump terminator,
-        // the first non-NOP instruction begins a new function entry point.
-        if (i >= 2 && words[i] != 0) {
+        // After a function return (JR $ra + delay slot),
+        // the first non-NOP instruction begins a new function entry point if not spanned by a branch.
+        if (i >= 2 && words[i] != 0 && !is_spanned[i]) {
             MipsInsn prev_term;
             mips_decode_instruction(words[i - 2], cur_pc - 8, &prev_term);
-            if (prev_term.is_return || prev_term.id == MIPS_OP_J) {
+            if (prev_term.is_return) {
                 add_discovered_entry(discovered_entries, &entry_count, cur_pc);
             } else if (i >= 3 && words[i - 1] == 0) {
                 // If preceded by NOP padding after a return
                 mips_decode_instruction(words[i - 3], cur_pc - 12, &prev_term);
-                if (prev_term.is_return || prev_term.id == MIPS_OP_J) {
+                if (prev_term.is_return) {
                     add_discovered_entry(discovered_entries, &entry_count, cur_pc);
                 }
             }
         }
 
         // Standard MIPS stack frame prologue: addiu $sp, $sp, -imm
-        if (insn.id == MIPS_OP_ADDIU && insn.rs == 29 && insn.rt == 29 && insn.simm < 0) {
+        if (insn.id == MIPS_OP_ADDIU && insn.rs == 29 && insn.rt == 29 && insn.simm < 0 && !is_spanned[i]) {
             bool preceded_by_terminator = (i == 0);
             if (i >= 2) {
                 MipsInsn prev_branch;
@@ -80,6 +97,7 @@ MipsProgram* mips_analyze_program(const PS1Executable* exe) {
             }
         }
     }
+    free(is_spanned);
 
     // Sort function entry points
     for (int i = 0; i < entry_count - 1; i++) {
