@@ -211,8 +211,8 @@ void ps1_gpu_draw_triangle(PS1GPU* gpu, const PS1Vertex* v0, const PS1Vertex* v1
                     float fw0 = (float)w0 / area;
                     float fw1 = (float)w1 / area;
                     float fw2 = (float)w2 / area;
-                    int u = (int)(v0->u * fw0 + v1->u * fw1 + v2->u * fw2);
-                    int v = (int)(v0->v * fw0 + v1->v * fw1 + v2->v * fw2);
+                    int u = (int)(v0->u * fw0 + v1->u * fw1 + v2->u * fw2 + 0.5f);
+                    int v = (int)(v0->v * fw0 + v1->v * fw1 + v2->v * fw2 + 0.5f);
                     uint16_t tex_c = ps1_gpu_sample_texture(gpu, u, v);
                     if (tex_c == 0) continue; // Transparent color key
 
@@ -240,12 +240,15 @@ void ps1_gpu_clear_vram(PS1GPU* gpu, int16_t x, int16_t y, int16_t w, int16_t h,
     uint16_t color = rgb_to_ps1_color(r, g, b, 0);
     int x1 = x & 0x3F0; // 16-pixel aligned
     int y1 = y & 0x1FF;
-    int x2 = MIN(x1 + (w & 0x3FF), 1024);
-    int y2 = MIN(y1 + (h & 0x1FF), 512);
+    int cw = ((w & 0x3FF) + 0x0F) & ~0x0F;
+    if (cw == 0 && w > 0) cw = 1024;
+    int ch = h & 0x1FF;
+    if (ch == 0 && h > 0) ch = 512;
+    if (cw == 0 || ch == 0) return;
 
-    for (int cy = y1; cy < y2; cy++) {
-        for (int cx = x1; cx < x2; cx++) {
-            gpu->vram[cy][cx] = color;
+    for (int cy = 0; cy < ch; cy++) {
+        for (int cx = 0; cx < cw; cx++) {
+            gpu->vram[(y1 + cy) & 0x1FF][(x1 + cx) & 0x3FF] = color;
         }
     }
 }
@@ -493,8 +496,10 @@ static void execute_gp0_packet(PS1GPU* gpu) {
     if (op >= 0xA0 && op <= 0xBF) {
         gpu->transfer.x = (uint16_t)(gpu->gp0_fifo[1] & 0x3FF);
         gpu->transfer.y = (uint16_t)((gpu->gp0_fifo[1] >> 16) & 0x1FF);
-        gpu->transfer.w = (uint16_t)(gpu->gp0_fifo[2] & 0xFFFF);
-        gpu->transfer.h = (uint16_t)(gpu->gp0_fifo[2] >> 16);
+        uint16_t tw = (uint16_t)(gpu->gp0_fifo[2] & 0x3FF);
+        uint16_t th = (uint16_t)((gpu->gp0_fifo[2] >> 16) & 0x1FF);
+        gpu->transfer.w = (tw == 0) ? 1024 : tw;
+        gpu->transfer.h = (th == 0) ? 512 : th;
         gpu->transfer.cur_x = gpu->transfer.x;
         gpu->transfer.cur_y = gpu->transfer.y;
         gpu->transfer.active = true;

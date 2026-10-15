@@ -57,14 +57,10 @@ void ps1_timers_tick(PS1Context* ctx, uint32_t cycles) {
         if (reset_on_target && t->target > 0) {
             uint32_t next = current + step;
             if (next >= t->target) {
-                uint32_t count = next / t->target;
-                if (count > 64) count = 64;
                 t->value = (uint16_t)(next % t->target);
                 t->mode |= (1 << 11); // reached target
                 if (irq_on_target) {
-                    for (uint32_t c = 0; c < count; c++) {
-                        ps1_trigger_irq(ctx, IRQ_TIMER0 << i);
-                    }
+                    ps1_trigger_irq(ctx, IRQ_TIMER0 << i);
                 }
             } else {
                 t->value = (uint16_t)next;
@@ -79,14 +75,10 @@ void ps1_timers_tick(PS1Context* ctx, uint32_t cycles) {
                 }
             }
             if (next >= 0x10000) {
-                uint32_t count = next / 0x10000;
-                if (count > 64) count = 64;
                 t->value = (uint16_t)(next & 0xFFFF);
                 t->mode |= (1 << 12); // reached 0xFFFF
                 if (irq_on_overflow) {
-                    for (uint32_t c = 0; c < count; c++) {
-                        ps1_trigger_irq(ctx, IRQ_TIMER0 << i);
-                    }
+                    ps1_trigger_irq(ctx, IRQ_TIMER0 << i);
                 }
             } else {
                 t->value = (uint16_t)next;

@@ -152,6 +152,49 @@ static void handle_cdrom_command(PS1Context* ctx, uint8_t cmd) {
             push_response(cd, cd->status);
             cd->irq_flag = 3;
             break;
+        case 0x10: // GetlocL (4 bytes header + 4 bytes subheader)
+            if (cd->image_file && cd->is_raw) {
+                uint8_t hdr[8] = {0};
+                uint32_t lba_idx = (cd->current_lba > 0) ? (cd->current_lba - 1) : 0;
+                long off = (long)lba_idx * cd->sector_size + 12;
+                fseek(cd->image_file, off, SEEK_SET);
+                size_t r = fread(hdr, 1, 8, cd->image_file);
+                (void)r;
+                for (int i = 0; i < 8; i++) push_response(cd, hdr[i]);
+            } else {
+                uint32_t lba = ((cd->current_lba > 0) ? (cd->current_lba - 1) : 0) + 150;
+                uint8_t m = (uint8_t)(lba / (60 * 75));
+                uint8_t s = (uint8_t)((lba % (60 * 75)) / 75);
+                uint8_t f = (uint8_t)(lba % 75);
+                push_response(cd, ((m / 10) << 4) | (m % 10));
+                push_response(cd, ((s / 10) << 4) | (s % 10));
+                push_response(cd, ((f / 10) << 4) | (f % 10));
+                push_response(cd, 0x02); // Mode 2 Form 1
+                for (int i = 0; i < 4; i++) push_response(cd, 0x00);
+            }
+            cd->irq_flag = 3;
+            break;
+        case 0x11: // GetlocP (Track, Index, Relative M/S/F, Absolute M/S/F)
+            {
+                uint32_t rel_lba = cd->current_lba;
+                uint32_t abs_lba = rel_lba + 150;
+                uint8_t rm = (uint8_t)(rel_lba / (60 * 75));
+                uint8_t rs = (uint8_t)((rel_lba % (60 * 75)) / 75);
+                uint8_t rf = (uint8_t)(rel_lba % 75);
+                uint8_t am = (uint8_t)(abs_lba / (60 * 75));
+                uint8_t as = (uint8_t)((abs_lba % (60 * 75)) / 75);
+                uint8_t af = (uint8_t)(abs_lba % 75);
+                push_response(cd, 0x01); // Track 1
+                push_response(cd, 0x01); // Index 1
+                push_response(cd, ((rm / 10) << 4) | (rm % 10));
+                push_response(cd, ((rs / 10) << 4) | (rs % 10));
+                push_response(cd, ((rf / 10) << 4) | (rf % 10));
+                push_response(cd, ((am / 10) << 4) | (am % 10));
+                push_response(cd, ((as / 10) << 4) | (as % 10));
+                push_response(cd, ((af / 10) << 4) | (af % 10));
+                cd->irq_flag = 3;
+            }
+            break;
         case 0x15: // SeekL
         case 0x16: // SeekP
             cd->seeking = true;
@@ -224,7 +267,7 @@ void ps1_cdrom_tick(PS1Context* ctx, uint32_t cycles) {
             // Read sector (support subheader mode 0x20)
             bool subheader_mode = (cd->mode & 0x20) != 0;
             uint32_t sec_offset = (cd->is_raw ? (subheader_mode ? 12 : 24) : 0);
-            uint32_t sec_size = subheader_mode ? (2048 + (cd->is_raw ? 12 : 0)) : CDROM_SECTOR_SIZE_DATA;
+            uint32_t sec_size = subheader_mode ? (cd->is_raw ? 2340 : 2048) : CDROM_SECTOR_SIZE_DATA;
             long offset = (long)cd->current_lba * cd->sector_size + sec_offset;
             fseek(cd->image_file, offset, SEEK_SET);
             size_t r = fread(cd->data_fifo, 1, sec_size, cd->image_file);
@@ -270,14 +313,6 @@ uint8_t ps1_cdrom_read(PS1Context* ctx, uint32_t addr) {
             ret = 0xE0 | (cd->irq_flag & 0x1F);
             break;
     }
-    // Only log if not repetitive status polling
-    static int poll_count = 0;
-    if (reg == 0 && ret == (cd->reg_index | (1<<3) | (1<<4))) {
-        if (++poll_count <= 2) PS1_LOG(2, "[CD-R] reg=0 (poll)\n");
-    } else {
-        PS1_LOG(2, "[CD-R] reg=%d (idx=%d) -> 0x%02X\n", reg, cd->reg_index, ret);
-        poll_count = 0;
-    }
     return ret;
 }
 
@@ -314,7 +349,7 @@ void ps1_cdrom_write(PS1Context* ctx, uint32_t addr, uint8_t val) {
                 // Request register (0x1F801803.0)
                 if ((val & 0x80) && cd->data_bytes_avail == 0) {
                     cd->data_read_pos = 0;
-                    cd->data_bytes_avail = (cd->mode & 0x20) ? (2048 + (cd->is_raw ? 12 : 0)) : CDROM_SECTOR_SIZE_DATA;
+                    cd->data_bytes_avail = (cd->mode & 0x20) ? (cd->is_raw ? 2340 : 2048) : CDROM_SECTOR_SIZE_DATA;
                 }
             } else if (cd->reg_index == 1) {
                 // Acknowledge IRQ bits (0x1F801803.1)
