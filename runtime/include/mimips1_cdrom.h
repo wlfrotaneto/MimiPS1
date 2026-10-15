@@ -50,6 +50,7 @@ struct PS1CDROM {
     // Seek / Location target (Minute, Second, Sector)
     uint8_t  target_m, target_s, target_f;
     uint32_t current_lba;
+    uint32_t last_read_lba;
     bool     reading;
     bool     seeking;
     bool     playing;

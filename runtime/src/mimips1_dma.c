@@ -137,6 +137,7 @@ void ps1_dma_execute(PS1Context* ctx, int channel_idx) {
             if (r > 0) {
                 ctx->cdrom.data_bytes_avail = (int)r;
                 ctx->cdrom.data_read_pos = 0;
+                ctx->cdrom.last_read_lba = ctx->cdrom.current_lba;
                 ctx->cdrom.current_lba++;
             }
         }

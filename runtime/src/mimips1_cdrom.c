@@ -82,6 +82,7 @@ static void handle_cdrom_command(PS1Context* ctx, uint8_t cmd) {
                 uint32_t f = ((cd->target_f >> 4) * 10) + (cd->target_f & 0xF);
                 cd->current_lba = (m * 60 * 75) + (s * 75) + f;
                 if (cd->current_lba >= 150) cd->current_lba -= 150; // 2-second pregap
+                cd->last_read_lba = cd->current_lba;
                 PS1_LOG(2, "[CDROM] Setloc %02X:%02X:%02X (%u:%u:%u) -> LBA %u\n",
                        cd->target_m, cd->target_s, cd->target_f, m, s, f, cd->current_lba);
             }
@@ -158,14 +159,14 @@ static void handle_cdrom_command(PS1Context* ctx, uint8_t cmd) {
         case 0x10: // GetlocL (4 bytes header + 4 bytes subheader)
             if (cd->image_file && cd->is_raw) {
                 uint8_t hdr[8] = {0};
-                uint32_t lba_idx = (cd->current_lba > 0) ? (cd->current_lba - 1) : 0;
+                uint32_t lba_idx = cd->last_read_lba;
                 long off = (long)lba_idx * cd->sector_size + 12;
                 fseek(cd->image_file, off, SEEK_SET);
                 size_t r = fread(hdr, 1, 8, cd->image_file);
                 (void)r;
                 for (int i = 0; i < 8; i++) push_response(cd, hdr[i]);
             } else {
-                uint32_t lba = ((cd->current_lba > 0) ? (cd->current_lba - 1) : 0) + 150;
+                uint32_t lba = cd->last_read_lba + 150;
                 uint8_t m = (uint8_t)(lba / (60 * 75));
                 uint8_t s = (uint8_t)((lba % (60 * 75)) / 75);
                 uint8_t f = (uint8_t)(lba % 75);
@@ -179,7 +180,7 @@ static void handle_cdrom_command(PS1Context* ctx, uint8_t cmd) {
             break;
         case 0x11: // GetlocP (Track, Index, Relative M/S/F, Absolute M/S/F)
             {
-                uint32_t rel_lba = cd->current_lba;
+                uint32_t rel_lba = cd->last_read_lba;
                 uint32_t abs_lba = rel_lba + 150;
                 uint8_t rm = (uint8_t)(rel_lba / (60 * 75));
                 uint8_t rs = (uint8_t)((rel_lba % (60 * 75)) / 75);
@@ -201,6 +202,7 @@ static void handle_cdrom_command(PS1Context* ctx, uint8_t cmd) {
         case 0x15: // SeekL
         case 0x16: // SeekP
             cd->seeking = true;
+            cd->last_read_lba = cd->current_lba;
             cd->status |= CD_STAT_SEEK_BIT;
             push_response(cd, cd->status);
             cd->irq_flag = 3;
@@ -262,9 +264,14 @@ void ps1_cdrom_tick(PS1Context* ctx, uint32_t cycles) {
             return;
         }
 
+        // If sector was partially read by DMA/CPU, don't overwrite until finished
+        if (cd->data_bytes_avail > 0 && cd->data_read_pos > 0) {
+            return;
+        }
+
         cd->read_cycles += cycles;
-        // Pacing for static recompilation (~1000-2000 branch loops per sector)
-        uint32_t sector_period = (cd->mode & 0x80) ? 2048 : 4096;
+        // Pacing for static recompilation
+        uint32_t sector_period = (cd->mode & 0x80) ? 16384 : 32768;
 
         if (cd->read_cycles >= sector_period) {
             cd->read_cycles -= sector_period;
@@ -279,12 +286,13 @@ void ps1_cdrom_tick(PS1Context* ctx, uint32_t cycles) {
             if (r > 0) {
                 cd->data_bytes_avail = (int)r;
                 cd->data_read_pos = 0;
+                cd->last_read_lba = cd->current_lba;
                 cd->current_lba++;
                 cd->response_count = 0;
                 cd->response_read_pos = 0;
                 push_response(cd, cd->status);
                 cd->irq_flag = 1; // Sector data ready IRQ (INT1)
-                PS1_LOG(2, "[CDROM] Sector Delivered: LBA %u (avail=%d, mode=0x%02X)\n", cd->current_lba - 1, cd->data_bytes_avail, cd->mode);
+                PS1_LOG(2, "[CDROM] Sector Delivered: LBA %u (avail=%d, mode=0x%02X)\n", cd->last_read_lba, cd->data_bytes_avail, cd->mode);
                 ps1_trigger_irq(ctx, IRQ_CDROM);
             }
         }
@@ -355,10 +363,16 @@ void ps1_cdrom_write(PS1Context* ctx, uint32_t addr, uint8_t val) {
             break;
         case 3:
             if (cd->reg_index == 0) {
-                // Request register (0x1F801803.0)
-                if ((val & 0x80) && cd->data_bytes_avail == 0) {
+                // Request register (0x1F801803.0): Bit 7 = BFRD (Want Data)
+                if (val & 0x80) {
+                    if (cd->data_bytes_avail == 0) {
+                        cd->data_read_pos = 0;
+                        cd->data_bytes_avail = (cd->mode & 0x20) ? (cd->is_raw ? 2340 : 2048) : CDROM_SECTOR_SIZE_DATA;
+                    }
+                } else {
+                    // BFRD=0 resets data buffer read state
+                    cd->data_bytes_avail = 0;
                     cd->data_read_pos = 0;
-                    cd->data_bytes_avail = (cd->mode & 0x20) ? (cd->is_raw ? 2340 : 2048) : CDROM_SECTOR_SIZE_DATA;
                 }
             } else if (cd->reg_index == 1 || cd->reg_index == 3) {
                 // Acknowledge IRQ bits (0x1F801803.1 / 0x1F801803.3)

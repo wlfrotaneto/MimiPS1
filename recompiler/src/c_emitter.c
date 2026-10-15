@@ -311,7 +311,11 @@ bool mips_emit_c_code(const MipsProgram* prog, const EmitterOptions* opts) {
                             fprintf(fc, "    if (_take_branch) goto loc_%08x;\n", br->target);
                         }
                     } else {
-                        fprintf(fc, "    if (_take_branch) { CALL_INDIRECT(0x%08X); return; }\n", br->target);
+                        if (br->is_call) {
+                            fprintf(fc, "    if (_take_branch) { CALL_INDIRECT(0x%08X); }\n", br->target);
+                        } else {
+                            fprintf(fc, "    if (_take_branch) { CALL_INDIRECT(0x%08X); return; }\n", br->target);
+                        }
                     }
                 }
                 // Function calls (JAL, JALR)
