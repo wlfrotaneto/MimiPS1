@@ -236,7 +236,7 @@ void ps1_gpu_draw_triangle(PS1GPU* gpu, const PS1Vertex* v0, const PS1Vertex* v1
                         g = tg;
                         b = tb;
                     }
-                    is_semi = semi_trans && ((tex_c & 0x8000) != 0);
+                    is_semi = semi_trans && ((tex_c & 0x8000) != 0) && ((tex_c & 0x7FFF) != 0);
                 }
 
                 blend_pixel(gpu, &gpu->vram[y % 512][x % 1024], r, g, b, is_semi);
@@ -293,7 +293,7 @@ void ps1_gpu_draw_rect(PS1GPU* gpu, int16_t x, int16_t y, int16_t w, int16_t h, 
                     pg = tg;
                     pb = tb;
                 }
-                is_semi = semi_trans && ((tex & 0x8000) != 0);
+                is_semi = semi_trans && ((tex & 0x8000) != 0) && ((tex & 0x7FFF) != 0);
             }
             blend_pixel(gpu, &gpu->vram[cy & 0x1FF][cx & 0x3FF], pr, pg, pb, is_semi);
         }
@@ -786,6 +786,35 @@ void ps1_gpu_vblank(PS1GPU* gpu) {
     gpu->front_disp_y = gpu->disp_y;
     gpu->front_disp_w = gpu->disp_w;
     gpu->front_disp_h = gpu->disp_h;
+
+    const char* dump_env = getenv("MIMIPS1_DUMP_FRAMES");
+    if (dump_env) {
+        static int s_dump_frame = 0;
+        s_dump_frame++;
+        if ((s_dump_frame % 120 == 0) && s_dump_frame <= 1200) {
+            char path[128];
+            snprintf(path, sizeof(path), "/tmp/vram_frame_%d.ppm", s_dump_frame);
+            FILE* fp = fopen(path, "wb");
+            if (fp) {
+                fprintf(fp, "P6\n1024 512\n255\n");
+                for (int y = 0; y < 512; y++) {
+                    for (int x = 0; x < 1024; x++) {
+                        uint16_t c = gpu->vram[y][x];
+                        uint8_t r = (uint8_t)(((c >> 0) & 0x1F) << 3);
+                        uint8_t g = (uint8_t)(((c >> 5) & 0x1F) << 3);
+                        uint8_t b = (uint8_t)(((c >> 10) & 0x1F) << 3);
+                        fputc(r, fp);
+                        fputc(g, fp);
+                        fputc(b, fp);
+                    }
+                }
+                fclose(fp);
+                printf("[VRAM Capture] Saved 1024x512 VRAM framebuffer to %s (disp_x=%d, disp_y=%d, %dx%d)\n",
+                       path, gpu->disp_x, gpu->disp_y, gpu->disp_w, gpu->disp_h);
+                fflush(stdout);
+            }
+        }
+    }
 
     check_gp0_stats_env();
     if (!s_gp0_stats_enabled) return;

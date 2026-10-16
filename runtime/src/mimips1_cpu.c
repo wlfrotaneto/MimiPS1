@@ -160,12 +160,23 @@ static void ps1_interpret_fallback(PS1Context* ctx, uint32_t start_pc) {
     PS1_LOG(1, "[INTERP] Entered MIPS interpreter fallback at 0x%08X (RA=0x%08X)\n", start_pc, entry_ra);
 
     while (pc != 0 && (pc & 0x1FFFFFFF) < PS1_RAM_SIZE) {
+        uint32_t masked_pc = pc & 0x1FFFFFFF;
+        if (masked_pc == 0xA0 || masked_pc == 0xB0 || masked_pc == 0xC0) {
+            if (masked_pc == 0xA0) ps1_bios_handle_a0(ctx, ctx->cpu.r[9]);
+            else if (masked_pc == 0xB0) ps1_bios_handle_b0(ctx, ctx->cpu.r[9]);
+            else if (masked_pc == 0xC0) ps1_bios_handle_c0(ctx, ctx->cpu.r[9]);
+            if (call_depth == 0) {
+                ctx->cpu.pc = ctx->cpu.r[31];
+                return;
+            }
+            call_depth--;
+            pc = ctx->cpu.r[31];
+            continue;
+        }
+
         if (++insn_count % 64 == 0) {
             ps1_cpu_tick(ctx, 32);
-            if (insn_count > 500000) {
-                fprintf(stderr, "[INTERP] Safety limit exceeded at 0x%08X (RA=0x%08X)\n", pc, ctx->cpu.r[31]);
-                break;
-            }
+            if (!ctx->running) break;
         }
 
         uint32_t raw = ps1_mem_read32(ctx, pc);

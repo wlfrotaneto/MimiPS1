@@ -254,7 +254,13 @@ void ps1_cpu_tick(PS1Context* ctx, uint32_t cycles) {
         while (ctx->cycle_counter >= ctx->next_vblank_cycle) {
             ctx->next_vblank_cycle += (uint64_t)(PS1_CPU_CLOCK_HZ / 59.94);
             ctx->frame_count++;
-            ctx->gpu.interlace_field = !ctx->gpu.interlace_field;
+            if ((ctx->frame_count % 60) == 0) {
+                printf("[Heartbeat Frame %llu] PC=0x%08X RA=0x%08X IRQ_STAT=0x%04X IRQ_MASK=0x%04X CD_STAT=0x%02X CD_LBA=%u DISP=(%d,%d %dx%d)\n",
+                       (unsigned long long)ctx->frame_count, ctx->cpu.pc, ctx->cpu.r[31],
+                       ctx->irq_stat, ctx->irq_mask, ctx->cdrom.status, ctx->cdrom.current_lba,
+                       ctx->gpu.disp_x, ctx->gpu.disp_y, ctx->gpu.disp_w, ctx->gpu.disp_h);
+                fflush(stdout);
+            }
 
             ps1_trigger_irq(ctx, IRQ_VBLANK);
             ps1_gpu_vblank(&ctx->gpu);

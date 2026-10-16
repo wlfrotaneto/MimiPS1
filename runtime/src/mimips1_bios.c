@@ -21,6 +21,32 @@ void ps1_bios_init(PS1Context* ctx) {
     ctx->bios.heap_base = 0x80100000;
     ctx->bios.heap_size = 0x80000; // 512KB default heap
     ctx->bios.heap_cur = ctx->bios.heap_base;
+
+    // Setup Kernel BIOS Vector Trampolines in low RAM (0xA0, 0xB0, 0xC0)
+    *(uint32_t*)&ctx->memory.ram[0xA0] = 0x03E00008; // jr $ra
+    *(uint32_t*)&ctx->memory.ram[0xA4] = 0x00000000; // nop
+    *(uint32_t*)&ctx->memory.ram[0xB0] = 0x03E00008; // jr $ra
+    *(uint32_t*)&ctx->memory.ram[0xB4] = 0x00000000; // nop
+    *(uint32_t*)&ctx->memory.ram[0xC0] = 0x03E00008; // jr $ra
+    *(uint32_t*)&ctx->memory.ram[0xC4] = 0x00000000; // nop
+
+    // Populate B0 Table at 0x80000800 (128 entries) and stubs at 0x80001000
+    for (uint32_t i = 0; i < 128; i++) {
+        uint32_t stub_addr = 0x80001000 + (i * 12);
+        *(uint32_t*)&ctx->memory.ram[0x0800 + (i * 4)] = stub_addr;
+        *(uint32_t*)&ctx->memory.ram[0x1000 + (i * 12) + 0] = 0x24090000 | i; // addiu $t1, $zero, i
+        *(uint32_t*)&ctx->memory.ram[0x1000 + (i * 12) + 4] = 0x0800002C;     // j 0x000000B0
+        *(uint32_t*)&ctx->memory.ram[0x1000 + (i * 12) + 8] = 0x00000000;     // nop
+    }
+
+    // Populate C0 Table at 0x80000C00 (128 entries) and stubs at 0x80001800
+    for (uint32_t i = 0; i < 128; i++) {
+        uint32_t stub_addr = 0x80001800 + (i * 12);
+        *(uint32_t*)&ctx->memory.ram[0x0C00 + (i * 4)] = stub_addr;
+        *(uint32_t*)&ctx->memory.ram[0x1800 + (i * 12) + 0] = 0x24090000 | i; // addiu $t1, $zero, i
+        *(uint32_t*)&ctx->memory.ram[0x1800 + (i * 12) + 4] = 0x08000030;     // j 0x000000C0
+        *(uint32_t*)&ctx->memory.ram[0x1800 + (i * 12) + 8] = 0x00000000;     // nop
+    }
 }
 
 void ps1_bios_reset(PS1Context* ctx) {
@@ -288,7 +314,11 @@ bool ps1_bios_handle_a0(PS1Context* ctx, uint32_t func) {
             {
                 uint32_t* env = (uint32_t*)get_host_ptr(ctx, r[4]);
                 if (env) {
-                    for (int i = 0; i < 16; i++) env[i] = r[16 + i];
+                    env[0] = r[31]; // RA
+                    env[1] = r[29]; // SP
+                    env[2] = r[30]; // FP
+                    for (int i = 0; i < 8; i++) env[3 + i] = r[16 + i]; // S0..S7
+                    env[11] = r[28]; // GP
                 }
                 r[2] = 0;
             }
@@ -297,7 +327,11 @@ bool ps1_bios_handle_a0(PS1Context* ctx, uint32_t func) {
             {
                 uint32_t* env = (uint32_t*)get_host_ptr(ctx, r[4]);
                 if (env) {
-                    for (int i = 0; i < 16; i++) r[16 + i] = env[i];
+                    r[31] = env[0]; // RA
+                    r[29] = env[1]; // SP
+                    r[30] = env[2]; // FP
+                    for (int i = 0; i < 8; i++) r[16 + i] = env[3 + i]; // S0..S7
+                    r[28] = env[11]; // GP
                 }
                 r[2] = r[5] ? r[5] : 1;
             }
@@ -399,6 +433,51 @@ bool ps1_bios_handle_a0(PS1Context* ctx, uint32_t func) {
                 const void* s2 = get_host_ptr(ctx, r[5]);
                 r[2] = (s1 && s2) ? (uint32_t)memcmp(s1, s2, r[6]) : 0;
             }
+        case 0x2E: // memchr(s, c, n)
+            {
+                const void* s = get_host_ptr(ctx, r[4]);
+                void* res = s ? memchr(s, (int)r[5], r[6]) : NULL;
+                r[2] = res ? (r[4] + (uint32_t)((uint8_t*)res - (uint8_t*)s)) : 0;
+            }
+            return true;
+        case 0x2F: // rand()
+            r[2] = (uint32_t)(rand() & 0x7FFF);
+            return true;
+        case 0x30: // srand(seed)
+            srand(r[4]);
+            r[2] = 0;
+            return true;
+        case 0x33: // malloc(size)
+            {
+                uint32_t size = (r[4] + 3) & ~3;
+                uint32_t ptr = ctx->bios.heap_cur;
+                ctx->bios.heap_cur += size;
+                r[2] = ptr;
+            }
+            return true;
+        case 0x34: // free(ptr)
+            r[2] = 0;
+            return true;
+        case 0x37: // calloc(num, size)
+            {
+                uint32_t total = (r[4] * r[5] + 3) & ~3;
+                uint32_t ptr = ctx->bios.heap_cur;
+                ctx->bios.heap_cur += total;
+                void* host_ptr = get_host_ptr(ctx, ptr);
+                if (host_ptr) memset(host_ptr, 0, total);
+                r[2] = ptr;
+            }
+            return true;
+        case 0x38: // realloc(ptr, size)
+            {
+                uint32_t size = (r[5] + 3) & ~3;
+                uint32_t new_ptr = ctx->bios.heap_cur;
+                ctx->bios.heap_cur += size;
+                void* old_h = get_host_ptr(ctx, r[4]);
+                void* new_h = get_host_ptr(ctx, new_ptr);
+                if (old_h && new_h && size > 0) memcpy(new_h, old_h, size);
+                r[2] = new_ptr;
+            }
             return true;
         case 0x39: // InitCARD(pad_enable)
         case 0x3C: // _bu_init()
@@ -406,8 +485,16 @@ bool ps1_bios_handle_a0(PS1Context* ctx, uint32_t func) {
             return true;
         case 0x3A: // StartCARD()
         case 0x3B: // StopCARD()
+        case 0x47: // AddDrv(device_info)
+        case 0x48: // DelDrv(device_name)
         case 0x4A: // InitSpu()
             r[2] = 1;
+            return true;
+        case 0x54: // _96_init()
+            r[2] = 0;
+            return true;
+        case 0x9F: // SetMem(size)
+            r[2] = 2; // 2MB RAM
             return true;
         case 0x3E: // puts(str)
         case 0x3F: // printf(fmt, ...)
@@ -520,27 +607,65 @@ bool ps1_bios_handle_b0(PS1Context* ctx, uint32_t func) {
                 r[2] = ret;
             }
             return true;
-        case 0x07: // DeliverEvent(class, spec) (Rev 1)
-        case 0x17: // DeliverEvent(class, spec) (Rev 2)
+        case 0x00: // alloc_kernel_memory(size)
+            {
+                uint32_t size = (r[4] + 3) & ~3;
+                uint32_t ptr = ctx->bios.heap_cur;
+                ctx->bios.heap_cur += size;
+                r[2] = ptr;
+            }
+            return true;
+        case 0x01: // free_kernel_memory(ptr)
+            r[2] = 1;
+            return true;
+        case 0x02: // init_timer(t, reload, flags)
+            r[2] = 1;
+            return true;
+        case 0x03: // get_timer(t)
+            r[2] = 0;
+            return true;
+        case 0x04: // enable_timer_irq(t)
+            r[2] = 1;
+            return true;
+        case 0x05: // disable_timer_irq(t)
+            r[2] = 1;
+            return true;
+        case 0x06: // restart_timer(t)
+            r[2] = 1;
+            return true;
+        case 0x07: // DeliverEvent(class, spec)
             ps1_bios_deliver_event(ctx, r[4], r[5]);
             r[2] = 0;
             return true;
         case 0x08: // OpenEvent(class, spec, mode, func) (Rev 1)
-        case 0x18: // OpenEvent(class, spec, mode, func) (Rev 2)
-            for (int i = 0; i < PS1_MAX_EVENTS; i++) {
-                if (!ctx->bios.events[i].is_open) {
-                    ctx->bios.events[i].class_id = r[4];
-                    ctx->bios.events[i].spec = r[5];
-                    ctx->bios.events[i].mode = r[6];
-                    ctx->bios.events[i].func = r[7];
-                    ctx->bios.events[i].is_open = true;
-                    ctx->bios.events[i].enabled = false;
-                    ctx->bios.events[i].triggered = false;
-                    r[2] = i | 0xF0000000;
-                    return true;
+        case 0x18: // ResetEntryInt() or OpenEvent (Rev 2)
+            if ((r[4] & 0xF0000000) == 0xF0000000) {
+                for (int i = 0; i < PS1_MAX_EVENTS; i++) {
+                    if (!ctx->bios.events[i].is_open) {
+                        ctx->bios.events[i].class_id = r[4];
+                        ctx->bios.events[i].spec = r[5];
+                        ctx->bios.events[i].mode = r[6];
+                        ctx->bios.events[i].func = r[7];
+                        ctx->bios.events[i].is_open = true;
+                        ctx->bios.events[i].enabled = false;
+                        ctx->bios.events[i].triggered = false;
+                        r[2] = i | 0xF0000000;
+                        return true;
+                    }
                 }
+                r[2] = 0xFFFFFFFF;
+            } else {
+                ctx->bios.hook_entry_int_addr = 0;
+                r[2] = 0;
             }
-            r[2] = 0xFFFFFFFF;
+            return true;
+        case 0x17: // ReturnFromException()
+            return true;
+        case 0x19: // HookEntryInt(addr)
+            ctx->bios.hook_entry_int_addr = r[4];
+            printf("[BIOS B0:19] HookEntryInt registered at 0x%08X (handler PC=0x%08X)\n",
+                   r[4], ps1_mem_read32(ctx, r[4]));
+            r[2] = 0;
             return true;
         case 0x09: // CloseEvent(event)
             {
@@ -562,24 +687,6 @@ bool ps1_bios_handle_b0(PS1Context* ctx, uint32_t func) {
                 } else {
                     r[2] = 0;
                 }
-            }
-            return true;
-        case 0x19: // setjmp(env)
-            {
-                uint32_t* env = (uint32_t*)get_host_ptr(ctx, r[4]);
-                if (env) {
-                    for (int i = 0; i < 16; i++) env[i] = r[16 + i];
-                }
-                r[2] = 0;
-            }
-            return true;
-        case 0x1A: // longjmp(env, val)
-            {
-                uint32_t* env = (uint32_t*)get_host_ptr(ctx, r[4]);
-                if (env) {
-                    for (int i = 0; i < 16; i++) r[16 + i] = env[i];
-                }
-                r[2] = r[5] ? r[5] : 1;
             }
             return true;
         case 0x0B: // TestEvent(event) (Rev 1)
@@ -669,6 +776,22 @@ bool ps1_bios_handle_b0(PS1Context* ctx, uint32_t func) {
             ctx->bios.heap_cur = r[4];
             r[2] = ctx->bios.heap_base;
             return true;
+        case 0x42: // firstfile(filename, dirent)
+            {
+                const char* pat = (const char*)get_host_ptr(ctx, r[4]);
+                uint8_t* dirent = (uint8_t*)get_host_ptr(ctx, r[5]);
+                PS1ISOFile iso;
+                if (pat && dirent && ps1_cdrom_find_file(&ctx->cdrom, pat, &iso)) {
+                    memset(dirent, 0, 40);
+                    strncpy((char*)dirent, iso.name, 19);
+                    *(uint32_t*)&dirent[20] = 0; // attr
+                    *(uint32_t*)&dirent[24] = iso.size;
+                    r[2] = r[5];
+                } else {
+                    r[2] = 0;
+                }
+            }
+            return true;
         case 0x4A: // _card_info(port)
         case 0x4B: // _card_status(port)
             r[2] = 1;
@@ -700,11 +823,11 @@ bool ps1_bios_handle_b0(PS1Context* ctx, uint32_t func) {
         case 0x50: // _card_clear(port)
             r[2] = 1;
             return true;
-        case 0x56: // GetGraphType() / _ChangeClearPAD
-            r[2] = 2; // PSX
+        case 0x56: // GetC0Table()
+            r[2] = 0x80000C00;
             return true;
         case 0x57: // GetB0Table()
-            r[2] = 0;
+            r[2] = 0x80000800;
             return true;
         case 0x5B: // ChangeClearPAD(val) / ChangeClearRCnt
             r[2] = 0;
