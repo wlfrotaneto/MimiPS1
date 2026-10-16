@@ -92,21 +92,12 @@ void ps1_dma_execute(PS1Context* ctx, int channel_idx) {
                         ps1_gpu_write_gp0(&ctx->gpu, word);
                     }
                 }
-                if ((next_addr & 0x00800000) != 0 || header == 0) break;
+                if (next_addr == 0x00FFFFFF || next_addr == 0) break;
                 cur_addr = next_addr & 0x1FFFFC;
             }
         } else {
-            // Block Mode (sync_mode == 0: immediate block, sync_mode == 1: slice/request)
-            uint32_t bs = ch->bcr & 0xFFFF;
-            if (bs == 0) bs = 0x10000;
-            uint32_t word_count;
-            if (sync_mode == 1) {
-                uint32_t ba = ch->bcr >> 16;
-                if (ba == 0) ba = 1;
-                word_count = bs * ba;
-            } else {
-                word_count = bs;
-            }
+            // Block Mode
+            uint32_t word_count = (ch->bcr & 0xFFFF) * (ch->bcr >> 16 ? (ch->bcr >> 16) : 1);
             uint32_t addr = ch->madr & 0x1FFFFC;
             bool to_ram = (ch->chcr & 1) == 0;
 
@@ -150,7 +141,7 @@ void ps1_dma_execute(PS1Context* ctx, int channel_idx) {
                 ctx->cdrom.current_lba++;
             }
         }
-        uint32_t count = ch->bcr & 0xFFFF;
+        uint32_t count = (ch->bcr & 0xFFFF) * (ch->bcr >> 16 ? (ch->bcr >> 16) : 1);
         if (count == 0) count = 0x800 / 4; // Hardware quirk: BCR=0 transfers 0x800 bytes
         uint32_t addr = ch->madr & 0x1FFFFC;
         for (uint32_t i = 0; i < count && addr < PS1_RAM_SIZE; i++) {

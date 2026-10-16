@@ -565,16 +565,21 @@ def main():
     args = parser.parse_args()
     if args.command == "pipeline":
         actual_input = resolve_input_path(args.exe)
-        print(f"▶️  {BOLD}[Step 1/3] Processing and Recompiling MIPS R3000A:{RESET} {actual_input}")
-        boot_exe = recompile_exe(actual_input, args.output)
-
         app_name = args.name
         if not app_name:
-            app_name = auto_detect_game_name(actual_input, boot_exe)
+            app_name = auto_detect_game_name(actual_input)
             print(f"🎮 {CYAN}Auto-detected application name:{RESET} {BOLD}{app_name}{RESET}")
 
+        recomp_dir = args.output
+        if recomp_dir == os.path.join(BUILD_DIR, "recompiled"):
+            slug = re.sub(r'[^a-zA-Z0-9_-]', '_', app_name).lower().strip('_')
+            recomp_dir = os.path.join(BUILD_DIR, f"recompiled_{slug}")
+
+        print(f"▶️  {BOLD}[Step 1/3] Processing and Recompiling MIPS R3000A:{RESET} {actual_input}")
+        boot_exe = recompile_exe(actual_input, recomp_dir)
+
         print(f"\n▶️  {BOLD}[Step 2/3] Building Native Binary:{RESET} {app_name}")
-        bin_path = compile_native_app(args.output, app_name)
+        bin_path = compile_native_app(recomp_dir, app_name)
 
         is_disc = os.path.isfile(actual_input) and os.path.splitext(actual_input)[1].lower() in ['.bin', '.iso', '.img']
         disc_to_embed = actual_input if (is_disc and args.embed_disc) else None
