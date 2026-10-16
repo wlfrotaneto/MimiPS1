@@ -14,6 +14,8 @@
 #include "mimips1_input.h"
 #include "mimips1_card.h"
 
+#include <setjmp.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -55,6 +57,9 @@ struct PS1Context {
     uint64_t    cycle_counter;
     uint32_t    cycles_since_vblank;
     bool        in_tick;
+    bool        in_irq;
+    jmp_buf     irq_env;
+    bool        in_irq_handler;
     uint64_t    start_time_ns;
     uint64_t    next_vblank_cycle;
 

@@ -224,7 +224,14 @@ open "build/Crash Bandicoot.app"
 - [x] Out-of-function branch-and-link preservation (`BGEZAL`, `BLTZAL`)
 - [x] Kernel BIOS low RAM setup (`0x0000..0x2000`) with vector trampolines (`0x80`, `0xA0`, `0xB0`, `0xC0`), B0 & C0 tables
 - [x] Psy-Q `GetC0Table` (`B0:56`) and `GetB0Table` (`B0:57`) vector pointers preventing memory corruption in `libcd`/`libsnd`
-- [x] Accurate `HookEntryInt` (`B0:19`) and `jmp_buf` register state unpacking for custom game ISR callbacks
+- [x] Accurate `HookEntryInt` (`B0:19`) & `ReturnFromException` (`B0:17`) clean stack unwinding preventing recursive Psy-Q ISR initialization
+- [x] Host-accurate `longjmp` (`A0:14`) PC restoration in AOT recompiled MIPS code
+- [x] Inverted Active High bitfield for `OutdatedPadGetButtons` (`B0:16`) preventing premature button press spam on boot
+- [x] Full GP0 `StoreImage` (`0xC0..0xDF`, VRAM-to-CPU) image transfer execution
+- [x] Synchronized `GPUSTAT` drawing mode bits 0..10 upon `GP0(0xE1)` and textured polygon draw commands
+- [x] GP1 `Get GPU Info` (`0x10`) query support and latch in `GPUREAD` (`0x1F801810`)
+- [x] Hardware-accurate DMA2 Linked List termination condition (Bit 23 `0x00800000`)
+- [x] 60-frame heartbeat diagnostic telemetry in VBlank loop
 - [x] PS1 standard 12-word `setjmp` (`A0:13`) & `longjmp` (`A0:14`) context layout
 - [x] Basic MDEC MMIO (`0x1F801820` / `0x1F801824`) and DMA channel support preventing hang on FMV logos
 - [x] Full GTE vector coprocessor instruction pipeline with unit test suite

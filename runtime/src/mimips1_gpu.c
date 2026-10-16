@@ -25,7 +25,7 @@ static inline int16_t gp0_coord(uint32_t val) {
 
 void ps1_gpu_init(PS1GPU* gpu) {
     memset(gpu, 0, sizeof(PS1GPU));
-    gpu->status = GPUSTAT_READY_FOR_CMD | GPUSTAT_READY_FOR_DMA | GPUSTAT_READY_FOR_VRAM;
+    gpu->status = GPUSTAT_READY_FOR_CMD | GPUSTAT_READY_FOR_DMA | GPUSTAT_READY_FOR_VRAM | GPUSTAT_DRAW_TO_DISPLAY;
     gpu->disp_w = 320;
     gpu->disp_h = 240;
     gpu->clip_x2 = 1023;
@@ -65,7 +65,7 @@ uint32_t ps1_gpu_read_data(PS1GPU* gpu) {
         }
         return (uint32_t)p0 | ((uint32_t)p1 << 16);
     }
-    return 0;
+    return gpu->gpu_read_latch;
 }
 
 static int get_gp0_cmd_len(uint32_t cmd) {
@@ -397,10 +397,12 @@ static void execute_gp0_packet(PS1GPU* gpu) {
                     gpu->clut_x = (uint16_t)(((uv >> 16) & 0x3F) * 16);
                     gpu->clut_y = (uint16_t)((uv >> 22) & 0x1FF);
                 } else if (i == 1) {
-                    gpu->tex_page_x = (uint16_t)((uv >> 16) & 0x0F);
-                    gpu->tex_page_y = (uint16_t)((uv >> 20) & 0x01);
-                    gpu->semi_trans_mode = (uint8_t)((uv >> 21) & 0x03);
-                    gpu->tex_color_mode = (uint8_t)((uv >> 23) & 0x03);
+                    uint16_t tpage = (uint16_t)((uv >> 16) & 0x1FF);
+                    gpu->tex_page_x = tpage & 0x0F;
+                    gpu->tex_page_y = (tpage >> 4) & 0x01;
+                    gpu->semi_trans_mode = (uint8_t)((tpage >> 5) & 0x03);
+                    gpu->tex_color_mode = (uint8_t)((tpage >> 7) & 0x03);
+                    gpu->status = (gpu->status & ~0x01FFu) | (tpage & 0x01FFu);
                 }
             }
         }
@@ -558,6 +560,21 @@ static void execute_gp0_packet(PS1GPU* gpu) {
         return;
     }
 
+    // VRAM to CPU (StoreImage)
+    if (op >= 0xC0 && op <= 0xDF) {
+        gpu->transfer.x = (uint16_t)(gpu->gp0_fifo[1] & 0x3FF);
+        gpu->transfer.y = (uint16_t)((gpu->gp0_fifo[1] >> 16) & 0x1FF);
+        uint16_t tw = (uint16_t)(gpu->gp0_fifo[2] & 0x3FF);
+        uint16_t th = (uint16_t)((gpu->gp0_fifo[2] >> 16) & 0x1FF);
+        gpu->transfer.w = (tw == 0) ? 1024 : tw;
+        gpu->transfer.h = (th == 0) ? 512 : th;
+        gpu->transfer.cur_x = gpu->transfer.x;
+        gpu->transfer.cur_y = gpu->transfer.y;
+        gpu->transfer.active = true;
+        gpu->transfer.is_read = true;
+        return;
+    }
+
     // Draw Mode / Texpage
     if (op == 0xE1) {
         uint32_t val = gpu->gp0_fifo[0];
@@ -567,6 +584,7 @@ static void execute_gp0_packet(PS1GPU* gpu) {
         gpu->tex_color_mode = (uint8_t)((val >> 7) & 0x03);
         gpu->dither_enable = (val & (1 << 9)) != 0;
         gpu->tex_disable = (val & (1 << 11)) != 0;
+        gpu->status = (gpu->status & ~0x07FFu) | (val & 0x07FFu);
         return;
     }
 
@@ -732,6 +750,32 @@ void ps1_gpu_write_gp1(PS1GPU* gpu, uint32_t val) {
             }
             break;
         case 0x10: // Get GPU Info
+            switch (val & 0x0F) {
+                case 0x02:
+                    gpu->gpu_read_latch = ((uint32_t)gpu->tex_win_mask_x) |
+                                          ((uint32_t)gpu->tex_win_mask_y << 5) |
+                                          ((uint32_t)gpu->tex_win_off_x << 10) |
+                                          ((uint32_t)gpu->tex_win_off_y << 15);
+                    break;
+                case 0x03:
+                    gpu->gpu_read_latch = ((uint32_t)gpu->clip_x1 & 0x3FF) |
+                                          (((uint32_t)gpu->clip_y1 & 0x1FF) << 10);
+                    break;
+                case 0x04:
+                    gpu->gpu_read_latch = ((uint32_t)gpu->clip_x2 & 0x3FF) |
+                                          (((uint32_t)gpu->clip_y2 & 0x1FF) << 10);
+                    break;
+                case 0x05:
+                    gpu->gpu_read_latch = ((uint32_t)gpu->draw_offset_x & 0x7FF) |
+                                          (((uint32_t)gpu->draw_offset_y & 0x7FF) << 11);
+                    break;
+                case 0x07:
+                    gpu->gpu_read_latch = 2; // GPU Version 2 (standard retail PS1 GPU)
+                    break;
+                default:
+                    gpu->gpu_read_latch = 0;
+                    break;
+            }
             break;
     }
 }

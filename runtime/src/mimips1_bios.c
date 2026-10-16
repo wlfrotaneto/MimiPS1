@@ -334,6 +334,9 @@ bool ps1_bios_handle_a0(PS1Context* ctx, uint32_t func) {
                     r[30] = env[2]; // FP
                     for (int i = 0; i < 8; i++) r[16 + i] = env[3 + i]; // S0..S7
                     r[28] = env[11]; // GP
+                    if (env[0] != 0) {
+                        ctx->cpu.pc = env[0];
+                    }
                 }
                 r[2] = r[5] ? r[5] : 1;
             }
@@ -611,8 +614,8 @@ bool ps1_bios_handle_b0(PS1Context* ctx, uint32_t func) {
             return true;
         case 0x16: // OutdatedPadGetButtons()
             {
-                uint16_t b0 = ctx->input.pads[0].buttons;
-                uint16_t b1 = ctx->input.pads[1].buttons;
+                uint16_t b0 = ~ctx->input.pads[0].buttons;
+                uint16_t b1 = ~ctx->input.pads[1].buttons;
                 uint16_t rev0 = ((b0 & 0xFF) << 8) | ((b0 >> 8) & 0xFF);
                 uint16_t rev1 = ((b1 & 0xFF) << 8) | ((b1 >> 8) & 0xFF);
                 uint32_t ret = ((uint32_t)rev1 << 16) | rev0;
@@ -665,6 +668,9 @@ bool ps1_bios_handle_b0(PS1Context* ctx, uint32_t func) {
             }
             return true;
         case 0x17: // ReturnFromException()
+            if (ctx->in_irq_handler) {
+                longjmp(ctx->irq_env, 1);
+            }
             return true;
         case 0x18: // ResetEntryInt() or OpenEvent (Rev 2)
             if ((r[4] & 0xF0000000) == 0xF0000000) {
@@ -936,8 +942,8 @@ void ps1_bios_update_pads(PS1Context* ctx) {
     if (!ctx || !ctx->bios.pad_active) return;
 
     if (ctx->bios.pad_button_dest != 0) {
-        uint16_t b0 = ctx->input.pads[0].buttons;
-        uint16_t b1 = ctx->input.pads[1].buttons;
+        uint16_t b0 = ~ctx->input.pads[0].buttons;
+        uint16_t b1 = ~ctx->input.pads[1].buttons;
         uint16_t rev0 = ((b0 & 0xFF) << 8) | ((b0 >> 8) & 0xFF);
         uint16_t rev1 = ((b1 & 0xFF) << 8) | ((b1 >> 8) & 0xFF);
         uint32_t ret = ((uint32_t)rev1 << 16) | rev0;

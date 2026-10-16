@@ -10,6 +10,8 @@ __attribute__((weak)) void ps1_run_recompiled_game(PS1Context* ctx) {
 }
 
 int main(int argc, char** argv) {
+    setbuf(stdout, NULL);
+    setbuf(stderr, NULL);
     PS1Context* ctx = ps1_runtime_create();
     if (!ctx) {
         fprintf(stderr, "[Fatal] Failed to create PS1 runtime context\n");

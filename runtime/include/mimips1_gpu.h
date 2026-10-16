@@ -50,6 +50,7 @@ struct PS1GPU {
     
     // Status and Command processing
     uint32_t status;
+    uint32_t gpu_read_latch;
     uint32_t gp0_fifo[64];
     int      gp0_fifo_len;
     int      gp0_words_needed;
