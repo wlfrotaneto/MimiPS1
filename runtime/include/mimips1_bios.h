@@ -51,6 +51,9 @@ struct PS1BIOS {
     // Psy-Q / Hardware IRQ callback table (registered via A0:72)
     uint32_t    irq_callback_table;
 
+    // HookEntryInt (B0:19) custom exception handler buffer address
+    uint32_t    hook_entry_int_addr;
+
     // SysEnqIntRP queues (registered via C0:02, priorities 0..3)
     uint32_t    intrp_heads[4];
 };

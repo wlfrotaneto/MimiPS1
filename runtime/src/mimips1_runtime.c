@@ -183,6 +183,40 @@ void ps1_trigger_irq(PS1Context* ctx, uint32_t irq_bit) {
         }
     }
 
+    // Deliver to HookEntryInt (B0:19) custom Psy-Q exception handler if registered
+    if ((ctx->irq_stat & ctx->irq_mask) && ctx->bios.hook_entry_int_addr != 0) {
+        uint32_t hook_addr = ctx->bios.hook_entry_int_addr;
+        uint32_t handler_pc = ps1_mem_read32(ctx, hook_addr + 0x00);
+        if (handler_pc != 0 && (handler_pc & 3) == 0) {
+            uint32_t saved_r[32];
+            uint32_t saved_pc = ctx->cpu.pc;
+            uint32_t saved_hi = ctx->cpu.hi;
+            uint32_t saved_lo = ctx->cpu.lo;
+            memcpy(saved_r, ctx->cpu.r, sizeof(saved_r));
+
+            // Setup registers from jmp_buf layout
+            ctx->cpu.r[29] = ps1_mem_read32(ctx, hook_addr + 0x04); // SP
+            ctx->cpu.r[30] = ps1_mem_read32(ctx, hook_addr + 0x08); // FP
+            for (int i = 0; i < 8; i++) {
+                ctx->cpu.r[16 + i] = ps1_mem_read32(ctx, hook_addr + 0x0C + (i * 4)); // S0..S7
+            }
+            ctx->cpu.r[28] = ps1_mem_read32(ctx, hook_addr + 0x2C); // GP
+            ctx->cpu.r[31] = 0x80001000 + (0x17 * 12); // ReturnFromException stub
+
+            uint32_t p_sp = ctx->cpu.r[29] & 0x1FFFFFFF;
+            if (p_sp < 0x2000 || p_sp >= PS1_RAM_SIZE) {
+                ctx->cpu.r[29] = 0x801FFF00;
+            }
+
+            ps1_call_indirect(ctx, handler_pc);
+
+            memcpy(ctx->cpu.r, saved_r, sizeof(saved_r));
+            ctx->cpu.pc = saved_pc;
+            ctx->cpu.hi = saved_hi;
+            ctx->cpu.lo = saved_lo;
+        }
+    }
+
     // Deliver corresponding BIOS events to waiting game loops and callbacks
     if (irq_bit & IRQ_VBLANK) {
         ps1_bios_update_pads(ctx);

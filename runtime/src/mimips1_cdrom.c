@@ -264,17 +264,20 @@ void ps1_cdrom_tick(PS1Context* ctx, uint32_t cycles) {
             return;
         }
 
-        // If sector was partially read by DMA/CPU, don't overwrite until finished
-        if (cd->data_bytes_avail > 0 && cd->data_read_pos > 0) {
+        // Pacing for static recompilation
+        uint32_t sector_period = (cd->mode & 0x80) ? 16384 : 32768;
+
+        // If previous sector was delivered via INT1 and hasn't been consumed by DMA3 yet,
+        // wait up to 8 sector periods before advancing so DMA3 never misses a sector.
+        if (cd->data_bytes_avail > 0 && cd->read_cycles < (sector_period * 8)) {
+            cd->read_cycles += cycles;
             return;
         }
 
         cd->read_cycles += cycles;
-        // Pacing for static recompilation
-        uint32_t sector_period = (cd->mode & 0x80) ? 16384 : 32768;
 
         if (cd->read_cycles >= sector_period) {
-            cd->read_cycles -= sector_period;
+            cd->read_cycles = 0;
 
             // Read sector (support subheader mode 0x20)
             bool subheader_mode = (cd->mode & 0x20) != 0;
@@ -365,14 +368,10 @@ void ps1_cdrom_write(PS1Context* ctx, uint32_t addr, uint8_t val) {
             if (cd->reg_index == 0) {
                 // Request register (0x1F801803.0): Bit 7 = BFRD (Want Data)
                 if (val & 0x80) {
+                    cd->data_read_pos = 0;
                     if (cd->data_bytes_avail == 0) {
-                        cd->data_read_pos = 0;
                         cd->data_bytes_avail = (cd->mode & 0x20) ? (cd->is_raw ? 2340 : 2048) : CDROM_SECTOR_SIZE_DATA;
                     }
-                } else {
-                    // BFRD=0 resets data buffer read state
-                    cd->data_bytes_avail = 0;
-                    cd->data_read_pos = 0;
                 }
             } else if (cd->reg_index == 1 || cd->reg_index == 3) {
                 // Acknowledge IRQ bits (0x1F801803.1 / 0x1F801803.3)

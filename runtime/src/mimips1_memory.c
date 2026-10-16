@@ -166,6 +166,12 @@ uint32_t ps1_mmio_read(PS1Context* ctx, uint32_t addr, int size) {
     else if (addr >= 0x1F801C00 && addr <= 0x1F801E80) {
         return ps1_spu_read(&ctx->spu, addr);
     }
+    // MDEC Registers
+    else if (addr == 0x1F801820) {
+        return 0;
+    } else if (addr == 0x1F801824) {
+        return 0x80040000; // MDEC Status: FIFO empty, not busy, 15-bit output
+    }
     // Controller / SIO
     else if (addr >= 0x1F801040 && addr <= 0x1F80104E) {
         return ps1_input_read16(&ctx->input, addr);
@@ -201,6 +207,10 @@ void ps1_mmio_write(PS1Context* ctx, uint32_t addr, uint32_t val, int size) {
     // CD-ROM
     else if (addr >= 0x1F801800 && addr <= 0x1F801803) {
         ps1_cdrom_write(ctx, addr, (uint8_t)val);
+    }
+    // MDEC Registers
+    else if (addr == 0x1F801820 || addr == 0x1F801824) {
+        // MDEC command/control write stub
     }
     // SPU
     else if (addr >= 0x1F801C00 && addr <= 0x1F801E80) {

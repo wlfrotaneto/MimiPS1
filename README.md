@@ -208,9 +208,9 @@ open "build/Crash Bandicoot.app"
 | Title / Target | Serial | Recompilation | Video / GPU | Audio / SPU | Status |
 | :--- | :--- | :---: | :---: | :---: | :--- |
 | **Triangle Demo (Homebrew)** | N/A | ✅ Clean | ✅ Metal 60 FPS | N/A | **Fully Playable** |
-| **Crash Bandicoot** | `SCUS-94900` | ✅ Clean (817 funcs) | 🟡 Title Screen & 3D Model | 🟡 In progress | **Boots to Title Screen** (3D Crash & logo rendering, FS/memcard inited) |
-| **Cotton Original** | `SLPM-86461` | ✅ Clean (2129 funcs) | 🟡 Black screen / Sync | 🟡 In progress | **Recompiled & Packaged** (Native icon extracted from disc) |
-| **Castlevania: Symphony of the Night** | `SLUS-00067` | ✅ Clean (489 funcs) | 🟡 Black screen / Sync | 🟡 In progress | **Recompiled & Packaged** (CFG recursion capped, HD icon linked) |
+| **Crash Bandicoot** | `SCUS-94900` | ✅ Clean (820 funcs) | 🟡 Title Screen & 3D Model | 🟡 In progress | **Boots to Title Screen** (3D Crash & logo rendering, FS/memcard inited) |
+| **Cotton Original** | `SLPM-86461` | ✅ Clean (2133 funcs) | 🟡 Kernel & IRQ inited | 🟡 In progress | **Recompiled & Packaged** (Native icon extracted from disc) |
+| **Castlevania: Symphony of the Night** | `SLUS-00067` | ✅ Clean (518 funcs) | 🟡 Kernel & IRQ inited | 🟡 In progress | **Recompiled & Packaged** (CFG recursion capped, HD icon linked) |
 
 ---
 
@@ -219,15 +219,21 @@ open "build/Crash Bandicoot.app"
 ### Implemented & Validated
 - [x] Full MIPS-I R3000A instruction decoding & basic block reconstruction
 - [x] Function discovery, delay slot folding, and CFG analysis
-- [x] Function size safety capping (2048 insns) to prevent Clang recursive parser stack overflows
+- [x] Psy-Q BIOS stub detection (`JR $t2`) as function terminators in CFG analysis
+- [x] Function size safety capping (2048 insns) preventing Apple Clang parser stack overflow
 - [x] Out-of-function branch-and-link preservation (`BGEZAL`, `BLTZAL`)
+- [x] Kernel BIOS low RAM setup (`0x0000..0x2000`) with vector trampolines (`0x80`, `0xA0`, `0xB0`, `0xC0`), B0 & C0 tables
+- [x] Psy-Q `GetC0Table` (`B0:56`) and `GetB0Table` (`B0:57`) vector pointers preventing memory corruption in `libcd`/`libsnd`
+- [x] Accurate `HookEntryInt` (`B0:19`) and `jmp_buf` register state unpacking for custom game ISR callbacks
+- [x] PS1 standard 12-word `setjmp` (`A0:13`) & `longjmp` (`A0:14`) context layout
+- [x] Basic MDEC MMIO (`0x1F801820` / `0x1F801824`) and DMA channel support preventing hang on FMV logos
 - [x] Full GTE vector coprocessor instruction pipeline with unit test suite
 - [x] Metal hardware-accelerated rasterization & 1024×512 VRAM pipeline
 - [x] Texture modulation saturation safeguards (`(r * tr) >> 7`) fixing black drop shadow corruptions
 - [x] Sprite clipping (`clip_x2 + 1`, `clip_y2 + 1`) and UV coordinate wrapping
 - [x] VRAM-to-VRAM copy coordinate masking (`GP0(0x80..0x9F)`)
 - [x] Dual-format disc sector parser (2048-byte ISO & 2352-byte RAW Mode 2 Form 1)
-- [x] CD-ROM pacing & in-flight buffer protection preventing `.NSF` streaming chunk loss
+- [x] CD-ROM BFRD request register & in-flight buffer protection preventing `.NSF` streaming chunk loss
 - [x] Accurate `GetlocL` / `GetlocP` sub-channel positioning via `last_read_lba`
 - [x] Automated game icon pipeline (Disc TIM extraction + Libretro HD Boxart resolver)
 - [x] Zero-configuration pipeline with automatic title & BIOS detection

@@ -73,12 +73,14 @@ MipsProgram* mips_analyze_program(const PS1Executable* exe) {
         if (i >= 2 && words[i] != 0 && !is_spanned[i]) {
             MipsInsn prev_term;
             mips_decode_instruction(words[i - 2], cur_pc - 8, &prev_term);
-            if (prev_term.is_return) {
+            bool is_bios_jr = (prev_term.id == MIPS_OP_JR && prev_term.rs == 10);
+            if (prev_term.is_return || is_bios_jr) {
                 add_discovered_entry(discovered_entries, &entry_count, cur_pc);
             } else if (i >= 3 && words[i - 1] == 0) {
                 // If preceded by NOP padding after a return
                 mips_decode_instruction(words[i - 3], cur_pc - 12, &prev_term);
-                if (prev_term.is_return) {
+                is_bios_jr = (prev_term.id == MIPS_OP_JR && prev_term.rs == 10);
+                if (prev_term.is_return || is_bios_jr) {
                     add_discovered_entry(discovered_entries, &entry_count, cur_pc);
                 }
             }
@@ -120,7 +122,7 @@ MipsProgram* mips_analyze_program(const PS1Executable* exe) {
     for (int i = 0; i < entry_count; i++) {
         uint32_t start_pc = discovered_entries[i];
         uint32_t next_func_pc = (i + 1 < entry_count) ? discovered_entries[i + 1] : (exe->text_dest_addr + exe->text_size);
-        // Safety cap: never allow a single function to exceed 2048 instructions (8KB)
+        // Safety cap: never allow a single function to exceed 2048 instructions (8KB) to prevent Clang parser stack overflow
         if (next_func_pc > (start_pc + 2048 * 4)) {
             next_func_pc = start_pc + 2048 * 4;
         }

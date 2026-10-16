@@ -375,7 +375,7 @@ bool mips_emit_c_code(const MipsProgram* prog, const EmitterOptions* opts) {
             bool ends_with_jump = false;
             if (lb && lb->num_insns >= 2 && lb->insns[lb->num_insns - 2].has_delay_slot) {
                 const MipsInsn* last_branch = &lb->insns[lb->num_insns - 2];
-                if (last_branch->is_return || last_branch->id == MIPS_OP_J) {
+                if (last_branch->is_return || last_branch->id == MIPS_OP_J || last_branch->id == MIPS_OP_JR) {
                     ends_with_jump = true;
                 }
             }
