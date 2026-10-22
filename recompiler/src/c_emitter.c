@@ -3,6 +3,24 @@
 #include <stdlib.h>
 #include <string.h>
 
+// True when the function builds $ra by hand (ALU write instead of JAL/JALR/LW restore): its
+// "jr ra" is then a jump to a local label (hand-rolled call/return), not a function return.
+static bool writes_ra_manually(const MipsFunction* fn) {
+    for (const MipsBlock* b = fn->first_block; b; b = b->next) {
+        for (int i = 0; i < b->num_insns; i++) {
+            uint32_t raw = b->insns[i].raw;
+            uint32_t op = raw >> 26;
+            if (op >= 8 && op <= 15 && ((raw >> 16) & 31) == 31) return true;
+            if (op == 0) {
+                uint32_t funct = raw & 63;
+                bool alu = funct < 8 || (funct >= 0x10 && funct <= 0x13) || (funct >= 0x20 && funct <= 0x2B);
+                if (alu && ((raw >> 11) & 31) == 31) return true;
+            }
+        }
+    }
+    return false;
+}
+
 static bool is_func_in_program(const MipsProgram* prog, uint32_t target) {
     if (!prog) return false;
     MipsFunction* cur = prog->first_func;
@@ -243,6 +261,7 @@ bool mips_emit_c_code(const MipsProgram* prog, const EmitterOptions* opts) {
         fprintf(fc, "    bool _take_branch = false;\n");
         fprintf(fc, "    uint32_t _call_target = 0;\n");
         fprintf(fc, "    uint32_t _jr_target = 0;\n");
+        bool ra_local = writes_ra_manually(fn);
         fprintf(fc, "    if (_mid_entry) goto dispatch_entry;\n");
         fprintf(fc, "    PS1_TRACE_ENTER(0x%08X);\n", fn->entry_pc);
 
@@ -315,7 +334,8 @@ bool mips_emit_c_code(const MipsProgram* prog, const EmitterOptions* opts) {
                         if (br->is_call) {
                             fprintf(fc, "    if (_take_branch) { CALL_INDIRECT(0x%08X); }\n", br->target);
                         } else {
-                            fprintf(fc, "    if (_take_branch) { CALL_INDIRECT(0x%08X); return; }\n", br->target);
+                            fprintf(fc, ra_local ? "    if (_take_branch) { CALL_INDIRECT(0x%08X); ctx->cpu.pc = R(31); goto dispatch_ret; }\n"
+                                                : "    if (_take_branch) { CALL_INDIRECT(0x%08X); return; }\n", br->target);
                         }
                     }
                 }
@@ -342,7 +362,11 @@ bool mips_emit_c_code(const MipsProgram* prog, const EmitterOptions* opts) {
                 else if (br->is_return) {
                     fprintf(fc, "loc_%08x:\n", ds->pc);
                     emit_instruction_c(fc, ds); // Execute delay slot
-                    fprintf(fc, "    return;\n");
+                    if (ra_local) {
+                        fprintf(fc, "    ctx->cpu.pc = R(31);\n    ps1_cpu_tick(ctx, 32);\n    goto dispatch_ret;\n");
+                    } else {
+                        fprintf(fc, "    return;\n");
+                    }
                 }
                 // Unconditional Jump (J)
                 else if (br->id == MIPS_OP_J) {
@@ -354,7 +378,8 @@ bool mips_emit_c_code(const MipsProgram* prog, const EmitterOptions* opts) {
                         }
                         fprintf(fc, "    goto loc_%08x;\n", br->target);
                     } else {
-                        fprintf(fc, "    CALL_INDIRECT(0x%08X);\n    return;\n", br->target);
+                        fprintf(fc, ra_local ? "    CALL_INDIRECT(0x%08X);\n    ctx->cpu.pc = R(31);\n    goto dispatch_ret;\n"
+                                             : "    CALL_INDIRECT(0x%08X);\n    return;\n", br->target);
                     }
                 }
                 // Indirect Jump (JR $reg, e.g. switch jump tables)
@@ -401,6 +426,13 @@ bool mips_emit_c_code(const MipsProgram* prog, const EmitterOptions* opts) {
         }
         fprintf(fc, "        default: CALL_INDIRECT(ctx->cpu.pc); return;\n");
         fprintf(fc, "    }\n");
+        if (ra_local) {
+            fprintf(fc, "dispatch_ret:\n    switch (ctx->cpu.pc) {\n");
+            for (MipsBlock* rb = fn->first_block; rb; rb = rb->next)
+                for (int k = 0; k < rb->num_insns; k++)
+                    fprintf(fc, "        case 0x%08X: goto loc_%08x;\n", rb->insns[k].pc, rb->insns[k].pc);
+            fprintf(fc, "        default: return;\n    }\n");
+        }
         fprintf(fc, "}\n");
         fprintf(fc, "void %s(PS1Context* ctx) { %s_impl(ctx, 0); }\n", fn->name, fn->name);
         fprintf(fc, "static void %s_mid(PS1Context* ctx) { %s_impl(ctx, 1); }\n\n", fn->name, fn->name);

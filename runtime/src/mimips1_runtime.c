@@ -362,9 +362,9 @@ static void scheduler_run(PS1Context* ctx) {
         ctx->next_vblank_cycle += PS1_VBLANK_PERIOD;
         ctx->frame_count++;
         if ((ctx->frame_count % 60) == 0) {
-            printf("[Heartbeat Frame %llu] PC=0x%08X RA=0x%08X IRQ_STAT=0x%04X IRQ_MASK=0x%04X SR=0x%08X CD_STAT=0x%02X CD_LBA=%u DISP=(%d,%d %dx%d)\n",
+            printf("[Heartbeat Frame %llu] PC=0x%08X RA=0x%08X IRQ_STAT=0x%04X IRQ_MASK=0x%04X SR=0x%08X CAUSE=0x%08X EPC=0x%08X CD_STAT=0x%02X CD_LBA=%u DISP=(%d,%d %dx%d)\n",
                    (unsigned long long)ctx->frame_count, ctx->cpu.pc, ctx->cpu.r[31],
-                   ctx->irq_stat, ctx->irq_mask, ctx->cpu.cop0[COP0_SR], ctx->cdrom.status, ctx->cdrom.current_lba,
+                   ctx->irq_stat, ctx->irq_mask, ctx->cpu.cop0[COP0_SR], ctx->cpu.cop0[COP0_CAUSE], ctx->cpu.cop0[COP0_EPC], ctx->cdrom.status, ctx->cdrom.current_lba,
                    ctx->gpu.disp_x, ctx->gpu.disp_y, ctx->gpu.disp_w, ctx->gpu.disp_h);
             fflush(stdout);
         }
@@ -535,7 +535,7 @@ void ps1_native_check_range(PS1Context* ctx, uint32_t addr, uint32_t bytes) {
 // Called when the boot executable is about to run: trust the recompiled functions only if the
 // whole code image in RAM is identical to the one they were built from.
 void ps1_native_try_enable(PS1Context* ctx) {
-    if (ctx->native_enabled || !ctx->exe_shadow) return;
+    if (ctx->native_enabled || !ctx->exe_shadow || getenv("MIMIPS1_NONATIVE")) return;
     ctx->native_enabled = true;
     ps1_native_check_range(ctx, ctx->exe_text_addr & 0x1FFFFFFF, ctx->exe_text_size);
     printf("[MimiPS1] Boot executable verified: running recompiled code natively\n");
