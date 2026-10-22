@@ -1,3 +1,6 @@
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
 #import <Cocoa/Cocoa.h>
 #import <Metal/Metal.h>
 #import <MetalKit/MetalKit.h>
@@ -102,10 +105,16 @@ static const char* metal_shader_src =
     if (!_context) return;
 
     // Convert PS1 BGR555 VRAM to 32-bit BGRA host framebuffer (using front_vram snapshot for tear-free rendering)
-    const uint16_t (*source_vram)[PS1_VRAM_WIDTH] = _context->gpu.front_disp_w > 0 ? _context->gpu.front_vram : _context->gpu.vram;
-    bool is24 = _context->gpu.front_disp_w > 0 && _context->gpu.front_is_24bit;
-    int fx = _context->gpu.front_disp_x, fy = _context->gpu.front_disp_y;
-    int fw = _context->gpu.front_disp_w, fh = _context->gpu.front_disp_h;
+    const PS1GPUFrame* frame = ps1_gpu_acquire_frame(&_context->gpu);
+    static PS1GPUFrame* held = NULL;       // keeps showing the last frame if none is available
+    if (frame) { if (!held) held = malloc(sizeof(PS1GPUFrame)); memcpy(held, frame, sizeof(PS1GPUFrame)); }
+    ps1_gpu_release_frame(&_context->gpu);
+    if (!held) return;
+    frame = held;
+    const uint16_t (*source_vram)[PS1_VRAM_WIDTH] = frame->vram;
+    bool is24 = frame->is_24bit;
+    int fx = frame->disp_x, fy = frame->disp_y;
+    int fw = frame->disp_w, fh = frame->disp_h;
     if (is24) {
         // 24-bit display (FMV): three bytes per pixel straight out of VRAM, drawn at the texture origin
         for (int y = 0; y < fh && y < PS1_VRAM_HEIGHT; y++) {
@@ -182,15 +191,14 @@ static const char* metal_shader_src =
             [encoder setViewport:vp];
         }
 
-        int disp_x = _context->gpu.front_disp_w > 0 ? _context->gpu.front_disp_x : _context->gpu.disp_x;
-        int disp_y = _context->gpu.front_disp_w > 0 ? _context->gpu.front_disp_y : _context->gpu.disp_y;
-        int disp_w = _context->gpu.front_disp_w > 0 ? _context->gpu.front_disp_w : (_context->gpu.disp_w > 0 ? _context->gpu.disp_w : 320);
-        int disp_h = _context->gpu.front_disp_h > 0 ? _context->gpu.front_disp_h : (_context->gpu.disp_h > 0 ? _context->gpu.disp_h : 240);
+        int disp_x = frame->disp_x, disp_y = frame->disp_y;
+        int disp_w = frame->disp_w > 0 ? frame->disp_w : 320;
+        int disp_h = frame->disp_h > 0 ? frame->disp_h : 240;
 
         int crop_top = 0;
         int crop_bottom = 0;
-        int16_t y1 = _context->gpu.disp_y1;
-        int16_t y2 = _context->gpu.disp_y2;
+        int16_t y1 = frame->disp_y1;
+        int16_t y2 = frame->disp_y2;
         if (y1 > 0x10 && y2 > y1) {
             int active_h = y2 - y1;
             if (active_h < disp_h) {

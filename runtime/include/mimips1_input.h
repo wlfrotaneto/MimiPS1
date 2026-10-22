@@ -38,6 +38,7 @@ struct PS1Input {
     bool     xfer_busy;
     bool     xfer_ack;          // Device pulses /ACK at the end of this byte
     uint32_t xfer_cycles;
+    uint32_t ack_cycles;        // /ACK stays low (DSR set) only briefly after a byte
 
     // Memory card transaction (81h ... on the selected port)
     void*    cards;             // PS1CardManager*, set by the runtime

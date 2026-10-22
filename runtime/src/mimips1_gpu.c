@@ -30,6 +30,23 @@ void ps1_gpu_init(PS1GPU* gpu) {
     gpu->disp_h = 240;
     gpu->clip_x2 = 1023;
     gpu->clip_y2 = 511;
+    atomic_store(&gpu->frame_latest, -1);
+    atomic_store(&gpu->frame_reading, -1);
+}
+
+const PS1GPUFrame* ps1_gpu_acquire_frame(PS1GPU* gpu) {
+    for (int tries = 0; tries < 4; tries++) {
+        int lt = atomic_load(&gpu->frame_latest);
+        if (lt < 0) return NULL;
+        atomic_store(&gpu->frame_reading, lt);
+        if (atomic_load(&gpu->frame_latest) == lt) return &gpu->frames[lt];
+    }
+    atomic_store(&gpu->frame_reading, -1);
+    return NULL;
+}
+
+void ps1_gpu_release_frame(PS1GPU* gpu) {
+    atomic_store(&gpu->frame_reading, -1);
 }
 
 void ps1_gpu_reset(PS1GPU* gpu) {
@@ -720,12 +737,6 @@ void ps1_gpu_write_gp1(PS1GPU* gpu, uint32_t val) {
         case 0x05: // Display Start
             gpu->disp_x = (int16_t)(val & 0x3FE); // 2-pixel aligned in hardware
             gpu->disp_y = (int16_t)((val >> 10) & 0x1FF);
-            memcpy(gpu->front_vram, gpu->vram, sizeof(gpu->vram));
-            gpu->front_is_24bit = gpu->is_24bit;
-            gpu->front_disp_x = gpu->disp_x;
-            gpu->front_disp_y = gpu->disp_y;
-            gpu->front_disp_w = gpu->disp_w;
-            gpu->front_disp_h = gpu->disp_h;
             break;
         case 0x06: // Horizontal Display Range
             break;
@@ -782,12 +793,18 @@ void ps1_gpu_write_gp1(PS1GPU* gpu, uint32_t val) {
 }
 
 void ps1_gpu_vblank(PS1GPU* gpu) {
-    memcpy(gpu->front_vram, gpu->vram, sizeof(gpu->vram));
-    gpu->front_is_24bit = gpu->is_24bit;
-            gpu->front_disp_x = gpu->disp_x;
-    gpu->front_disp_y = gpu->disp_y;
-    gpu->front_disp_w = gpu->disp_w;
-    gpu->front_disp_h = gpu->disp_h;
+    {
+        int rd = atomic_load(&gpu->frame_reading), lt = atomic_load(&gpu->frame_latest);
+        int b = 0;
+        while (b == rd || b == lt) b++;
+        PS1GPUFrame* f = &gpu->frames[b];
+        memcpy(f->vram, gpu->vram, sizeof(gpu->vram));
+        f->is_24bit = gpu->is_24bit;
+        f->disp_x = gpu->disp_x; f->disp_y = gpu->disp_y;
+        f->disp_w = gpu->disp_w; f->disp_h = gpu->disp_h;
+        f->disp_y1 = gpu->disp_y1; f->disp_y2 = gpu->disp_y2;
+        atomic_store(&gpu->frame_latest, b);
+    }
 
     const char* dump_env = getenv("MIMIPS1_DUMP_FRAMES");
     if (dump_env) {

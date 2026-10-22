@@ -29,6 +29,33 @@ static void parse_card_directory(PS1MemoryCard* card) {
     }
 }
 
+// Frames 16..62 of a standard card. Software validates them (checksums included), so a card image
+// produced by an earlier version of this emulator is repaired on load.
+static bool card_fix_reserved_frames(PS1MemoryCard* card) {
+    bool changed = false;
+    for (int frame_idx = 16; frame_idx < 63; frame_idx++) {
+        uint8_t want[PS1_CARD_FRAME_SIZE];
+        if (frame_idx < 36) {                       // broken sector list: no entries in use
+            memset(want, 0, sizeof(want));
+            memset(want, 0xFF, 4);
+            want[8] = want[9] = 0xFF;
+            want[127] = calc_checksum(want);
+        } else if (frame_idx < 56) {                // replacement data
+            memset(want, 0xFF, sizeof(want));
+        } else {                                    // unused
+            memset(want, 0, sizeof(want));
+        }
+        uint8_t* f = &card->data[frame_idx * PS1_CARD_FRAME_SIZE];
+        // Only touch frames that still hold the layout of earlier versions of this emulator
+        bool legacy = (f[0] == 0xFF && f[1] == 0x00) || (frame_idx < 36 && f[0] == 0xFF && f[8] == 0x00);
+        if (memcmp(f, want, PS1_CARD_FRAME_SIZE) != 0 && legacy) {
+            memcpy(f, want, PS1_CARD_FRAME_SIZE);
+            changed = true;
+        }
+    }
+    return changed;
+}
+
 void ps1_card_init(PS1CardManager* mgr) {
     memset(mgr, 0, sizeof(PS1CardManager));
 }
@@ -63,12 +90,9 @@ void ps1_card_format(PS1CardManager* mgr, int slot) {
         f[127] = calc_checksum(f);
     }
 
-    // Frames 16..63: Broken sector list / reserved frames
-    for (int frame_idx = 16; frame_idx < 64; frame_idx++) {
-        uint8_t* f = &card->data[frame_idx * PS1_CARD_FRAME_SIZE];
-        f[0] = 0xFF;
-        f[127] = calc_checksum(f);
-    }
+    // Frames 16..35: broken sector list (every entry 0xFFFFFFFF = none); 36..62 replacement data / unused
+    card_fix_reserved_frames(card);
+    memcpy(&card->data[63 * PS1_CARD_FRAME_SIZE], &card->data[0], PS1_CARD_FRAME_SIZE); // write-test frame
 
     card->loaded = true;
     card->dirty = true;
@@ -97,8 +121,9 @@ bool ps1_card_load(PS1CardManager* mgr, int slot, const char* path) {
         ps1_card_save(mgr, slot);
     } else {
         card->loaded = true;
-        card->dirty = false;
+        card->dirty = card_fix_reserved_frames(card);
         parse_card_directory(card);
+        if (card->dirty) ps1_card_save(mgr, slot);
         printf("[MemCard] Successfully loaded 128KB Memory Card from: %s\n", path);
     }
 

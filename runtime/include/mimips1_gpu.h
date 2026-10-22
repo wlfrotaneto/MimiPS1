@@ -2,6 +2,7 @@
 #define MIMIPS1_GPU_H
 
 #include "mimips1_types.h"
+#include <stdatomic.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -45,6 +46,13 @@ typedef struct {
     uint8_t r, g, b;
 } PS1Vertex;
 
+typedef struct {
+    uint16_t vram[PS1_VRAM_HEIGHT][PS1_VRAM_WIDTH];
+    bool     is_24bit;
+    int16_t  disp_x, disp_y, disp_w, disp_h;
+    int16_t  disp_y1, disp_y2;
+} PS1GPUFrame;
+
 struct PS1GPU {
     uint16_t vram[PS1_VRAM_HEIGHT][PS1_VRAM_WIDTH]; // 1024 x 512 16-bit Framebuffer
     
@@ -83,10 +91,11 @@ struct PS1GPU {
     bool     interlace_field;
 
     // Double buffering snapshot & display crop
-    uint16_t front_vram[PS1_VRAM_HEIGHT][PS1_VRAM_WIDTH];
-    bool     front_is_24bit;    // colour depth of the presented frame
-    int16_t  front_disp_x, front_disp_y, front_disp_w, front_disp_h;
-    int16_t  front_crop_top, front_crop_bottom;
+    // The emulation thread publishes a snapshot per video frame (triple buffered, lock free);
+    // the presenter acquires the latest one and reads it without ever seeing a half-copied frame.
+    PS1GPUFrame frames[3];
+    _Atomic int frame_latest;   // index of the newest complete frame, -1 if none yet
+    _Atomic int frame_reading;  // index the presenter is using, -1 if none
 
     // VRAM Image transfer state
     struct {
@@ -98,6 +107,9 @@ struct PS1GPU {
 };
 
 void ps1_gpu_init(PS1GPU* gpu);
+// Presenter side: newest published frame (NULL before the first); release it when done
+const PS1GPUFrame* ps1_gpu_acquire_frame(PS1GPU* gpu);
+void ps1_gpu_release_frame(PS1GPU* gpu);
 void ps1_gpu_reset(PS1GPU* gpu);
 
 // Port Access

@@ -261,7 +261,7 @@ void ps1_mmio_write(PS1Context* ctx, uint32_t addr, uint32_t val, int size) {
     }
     // Controller / SIO
     else if (addr >= 0x1F801040 && addr <= 0x1F80104E) {
-        PS1_LOG(3, "[SIO W] %08X <- %04X (pc=%08X)\n", addr, val & 0xFFFF, ctx->cpu.pc);
+        PS1_LOG(3, "[SIO W] %08X <- %04X (pc=%08X ra=%08X cyc=%llu fr=%llu)\n", addr, val & 0xFFFF, ctx->cpu.pc, ctx->cpu.r[31], (unsigned long long)ctx->cycle_counter, (unsigned long long)ctx->frame_count);
         ps1_input_write16(&ctx->input, addr, (uint16_t)val);
     }
 }

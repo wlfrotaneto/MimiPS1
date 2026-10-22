@@ -40,6 +40,7 @@ typedef struct KernelEntry {
     struct KernelEntry* prev;
 } KernelEntry;
 static KernelEntry* s_kentry;
+static int s_bios_trace = -1;
 
 static inline bool interp_hle_vector(uint32_t pc) {
     uint32_t p = pc & 0x1FFFFFFF;
@@ -174,6 +175,23 @@ static void interp_loop(PS1Context* ctx, uint32_t stop_pc, bool check_sp, uint32
             continue;
         }
 
+        if (__builtin_expect(s_bios_trace, 0)) {
+            uint32_t p = pc & 0x1FFFFFFF;
+            if (pc == 0xBFC0D970u || pc == 0xA000D970u) printf("[BIOS] DeliverEvent(internal) %08X %08X ra=%08X frame=%llu\n", r[4], r[5], r[31], (unsigned long long)ctx->frame_count);
+            static uint32_t hits[8]; static int nhits = -1;
+            if (nhits < 0) { nhits = 0; const char* e = getenv("MIMIPS1_PCHIT"); while (e && *e && nhits < 8) { hits[nhits++] = (uint32_t)strtoul(e, (char**)&e, 16); if (*e == ',') e++; } }
+            for (int hi = 0; hi < nhits; hi++) if ((pc & 0x1FFFFFFF) == (hits[hi] & 0x1FFFFFFF))
+                printf("[HIT] %08X v0=%08X v1=%08X a0=%08X a1=%08X t3=%08X ra=%08X frame=%llu\n", pc, r[2], r[3], r[4], r[5], r[11], r[31], (unsigned long long)ctx->frame_count);
+            static uint32_t ret_pc, ret_fn, tev;
+            if (ret_pc && pc == ret_pc) { if ((ret_fn & 0xFFFF) != 0xB00B || r[2] == 1) printf("[BIOS]   -> %02X returned v0=%08X ev=%08X\n", ret_fn, r[2], tev); ret_pc = 0; }
+            uint32_t fnid = (p << 8) | (r[9] & 0xFF);
+            if (fnid == 0xB00B) { tev = r[4]; ret_pc = r[31]; ret_fn = fnid; }
+            bool noisy = fnid == 0xB00B || fnid == 0xB016 || fnid == 0xB017 || fnid == 0xA02F || fnid == 0xB007 || fnid == 0xB05B ||
+                         fnid == 0xC00A || fnid == 0xB03F || fnid == 0xB03D || fnid == 0xB020 || fnid == 0xB00A || fnid == 0xB00C;
+            if ((p == 0xA0 || p == 0xB0 || p == 0xC0) && !noisy) { ret_pc = r[31]; ret_fn = fnid; }
+            if ((p == 0xA0 || p == 0xB0 || p == 0xC0) && !noisy)
+                printf("[BIOS] %02X:%02X a0=%08X a1=%08X a2=%08X ra=%08X frame=%llu\n", (unsigned)p, (unsigned)r[9], r[4], r[5], r[6], r[31], (unsigned long long)ctx->frame_count);
+        }
         uint32_t npc = c->next_pc;
         bool in_ds = c->is_in_delay_slot;
         uint32_t insn = ps1_mem_read32(ctx, pc);
@@ -376,8 +394,10 @@ next_insn_exception:
     }
 }
 
+static void bios_trace_init(void) { s_bios_trace = getenv("MIMIPS1_BIOSTRACE") != NULL; }
 void ps1_interp_run(PS1Context* ctx) {
     s_pc_trace = getenv("MIMIPS1_PCTRACE") != NULL;
+    bios_trace_init();
     ctx->interp_depth++;
     interp_loop(ctx, 0xFFFFFFFFu, false, 0);
     ctx->interp_depth--;

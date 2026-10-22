@@ -134,7 +134,7 @@ static uint8_t exchange_byte(PS1Input* input, uint8_t tx) {
             }
             else if (tx == 0x81) { // Memory card
                 PS1CardManager* mgr = (PS1CardManager*)input->cards;
-                if (mgr && mgr->cards[pad_idx].loaded) {
+                if (mgr && mgr->cards[pad_idx].loaded && !getenv("MIMIPS1_NOCARD")) {
                     PS1_LOG(3, "[Card] port %d selected\n", pad_idx);
                     input->pad_state = 20;
                     input->card_slot = pad_idx;
@@ -147,6 +147,7 @@ static uint8_t exchange_byte(PS1Input* input, uint8_t tx) {
         case 20: { // memory card transaction
             bool more;
             rx = card_exchange(input, tx, &more);
+            PS1_LOG(3, "[CardIO] %c i=%d tx=%02X rx=%02X\n", input->card_cmd, input->card_idx - 1, tx, rx);
             (void)more;
             input->card_prev_tx = tx;
             break;
@@ -248,6 +249,10 @@ void ps1_input_write16(PS1Input* input, uint32_t addr, uint16_t val) {
 
 void ps1_input_tick(PS1Context* ctx, uint32_t cycles) {
     PS1Input* in = &ctx->input;
+    if (in->ack_cycles) {
+        if (in->ack_cycles > cycles) in->ack_cycles -= cycles;
+        else { in->ack_cycles = 0; in->stat &= ~0x0080; }   // /ACK released
+    }
     if (in->card_pending_save) {
         in->card_idle_cycles += cycles;
         if (in->card_idle_cycles > PS1_CPU_CLOCK_HZ) { // a second without writes: flush to disk
@@ -264,6 +269,7 @@ void ps1_input_tick(PS1Context* ctx, uint32_t cycles) {
     in->stat |= 0x0001 | 0x0004 | 0x0002;   // TX ready, RX byte available
     if (in->xfer_ack) {
         in->stat |= 0x0080 | 0x0200;        // DSR (/ACK) and IRQ flag
+        in->ack_cycles = 300;
         if (in->ctrl & (1 << 12)) {         // DSR interrupt enable
             ps1_trigger_irq(ctx, IRQ_CONTROLLER);
         }
