@@ -65,6 +65,9 @@ struct PS1SPU {
     uint16_t stat;
     uint32_t transfer_addr;
     uint16_t irq_addr;
+    uint32_t rev_pos;           // current position in the reverb work area (bytes from its base)
+    bool     rev_phase;         // reverb runs at 22.05 kHz: every other output sample
+    int32_t  rev_out_l, rev_out_r, rev_prev_l, rev_prev_r;
     uint16_t regs[0x200];       // raw mirror of the register file (reverb setup, unmodelled registers)
 
     // CoreAudio / Output audio ring buffer

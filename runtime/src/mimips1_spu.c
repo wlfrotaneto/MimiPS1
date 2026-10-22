@@ -252,12 +252,83 @@ static void noise_tick(PS1SPU* spu) {
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// Reverb (22.05 kHz comb / all-pass network working in SPU RAM)
+
+#define RV(name_off) ((int16_t)spu->regs[(0x1C0 + (name_off)) >> 1])
+static inline int32_t sat16(int32_t v) { return v > 32767 ? 32767 : v < -32768 ? -32768 : v; }
+
+static inline uint32_t rev_addr(PS1SPU* spu, uint32_t reg_off, int32_t extra) {
+    uint32_t base = ((uint32_t)spu->regs[0x1A2 >> 1] << 3) & 0x7FFFE;
+    if (base < 0x200) base = 0x200;
+    uint32_t span = 0x80000 - base;
+    uint32_t off = ((uint32_t)spu->regs[(0x1C0 + reg_off) >> 1] << 3) + (uint32_t)extra + spu->rev_pos;
+    return base + (off % span & ~1u);
+}
+static inline int16_t rev_rd(PS1SPU* spu, uint32_t reg_off, int32_t extra) {
+    return *(int16_t*)&spu->ram[rev_addr(spu, reg_off, extra)];
+}
+static inline void rev_wr(PS1SPU* spu, uint32_t reg_off, int32_t extra, int32_t v) {
+    *(int16_t*)&spu->ram[rev_addr(spu, reg_off, extra)] = (int16_t)sat16(v);
+}
+
+static void reverb_step(PS1SPU* spu, int32_t in_l, int32_t in_r, int32_t* out_l, int32_t* out_r) {
+    int32_t vIIR = RV(0x04), vWALL = RV(0x0E), vAPF1 = RV(0x10), vAPF2 = RV(0x12);
+    int32_t vCOMB1 = RV(0x06), vCOMB2 = RV(0x08), vCOMB3 = RV(0x0A), vCOMB4 = RV(0x0C);
+    int32_t Lin = (RV(0x3C) * in_l) >> 15, Rin = (RV(0x3E) * in_r) >> 15;
+    // register offsets relative to 0x1C0
+    enum { dAPF1 = 0x00, dAPF2 = 0x02, mLSAME = 0x14, mRSAME = 0x16, mLCOMB1 = 0x18, mRCOMB1 = 0x1A, mLCOMB2 = 0x1C, mRCOMB2 = 0x1E,
+           dLSAME = 0x20, dRSAME = 0x22, mLDIFF = 0x24, mRDIFF = 0x26, mLCOMB3 = 0x28, mRCOMB3 = 0x2A, mLCOMB4 = 0x2C, mRCOMB4 = 0x2E,
+           dLDIFF = 0x30, dRDIFF = 0x32, mLAPF1 = 0x34, mRAPF1 = 0x36, mLAPF2 = 0x38, mRAPF2 = 0x3A };
+
+    if (spu->ctrl & 0x80) {
+        int32_t v;
+        v = ((Lin + ((rev_rd(spu, dLSAME, 0) * vWALL) >> 15) - rev_rd(spu, mLSAME, -2)) * vIIR >> 15) + rev_rd(spu, mLSAME, -2);
+        rev_wr(spu, mLSAME, 0, v);
+        v = ((Rin + ((rev_rd(spu, dRSAME, 0) * vWALL) >> 15) - rev_rd(spu, mRSAME, -2)) * vIIR >> 15) + rev_rd(spu, mRSAME, -2);
+        rev_wr(spu, mRSAME, 0, v);
+        v = ((Lin + ((rev_rd(spu, dRDIFF, 0) * vWALL) >> 15) - rev_rd(spu, mLDIFF, -2)) * vIIR >> 15) + rev_rd(spu, mLDIFF, -2);
+        rev_wr(spu, mLDIFF, 0, v);
+        v = ((Rin + ((rev_rd(spu, dLDIFF, 0) * vWALL) >> 15) - rev_rd(spu, mRDIFF, -2)) * vIIR >> 15) + rev_rd(spu, mRDIFF, -2);
+        rev_wr(spu, mRDIFF, 0, v);
+    }
+
+    int32_t Lout = (vCOMB1 * rev_rd(spu, mLCOMB1, 0) + vCOMB2 * rev_rd(spu, mLCOMB2, 0) +
+                    vCOMB3 * rev_rd(spu, mLCOMB3, 0) + vCOMB4 * rev_rd(spu, mLCOMB4, 0)) >> 15;
+    int32_t Rout = (vCOMB1 * rev_rd(spu, mRCOMB1, 0) + vCOMB2 * rev_rd(spu, mRCOMB2, 0) +
+                    vCOMB3 * rev_rd(spu, mRCOMB3, 0) + vCOMB4 * rev_rd(spu, mRCOMB4, 0)) >> 15;
+
+    // All-pass filters 1 and 2
+    int32_t t;
+    t = rev_rd(spu, mLAPF1, -(int32_t)((uint32_t)spu->regs[(0x1C0 + dAPF1) >> 1] << 3));
+    Lout = sat16(Lout - ((vAPF1 * t) >> 15));
+    if (spu->ctrl & 0x80) rev_wr(spu, mLAPF1, 0, Lout);
+    Lout = sat16(((Lout * vAPF1) >> 15) + t);
+    t = rev_rd(spu, mRAPF1, -(int32_t)((uint32_t)spu->regs[(0x1C0 + dAPF1) >> 1] << 3));
+    Rout = sat16(Rout - ((vAPF1 * t) >> 15));
+    if (spu->ctrl & 0x80) rev_wr(spu, mRAPF1, 0, Rout);
+    Rout = sat16(((Rout * vAPF1) >> 15) + t);
+
+    t = rev_rd(spu, mLAPF2, -(int32_t)((uint32_t)spu->regs[(0x1C0 + dAPF2) >> 1] << 3));
+    Lout = sat16(Lout - ((vAPF2 * t) >> 15));
+    if (spu->ctrl & 0x80) rev_wr(spu, mLAPF2, 0, Lout);
+    Lout = sat16(((Lout * vAPF2) >> 15) + t);
+    t = rev_rd(spu, mRAPF2, -(int32_t)((uint32_t)spu->regs[(0x1C0 + dAPF2) >> 1] << 3));
+    Rout = sat16(Rout - ((vAPF2 * t) >> 15));
+    if (spu->ctrl & 0x80) rev_wr(spu, mRAPF2, 0, Rout);
+    Rout = sat16(((Rout * vAPF2) >> 15) + t);
+
+    *out_l = Lout; *out_r = Rout;
+    uint32_t base = ((uint32_t)spu->regs[0x1A2 >> 1] << 3) & 0x7FFFE; if (base < 0x200) base = 0x200;
+    spu->rev_pos = (spu->rev_pos + 2) % (0x80000 - base);
+}
+
 void ps1_spu_generate_samples(PS1SPU* spu, int16_t* output_stereo, int num_samples) {
     bool enabled = (spu->ctrl & 0x8000) != 0;
     bool unmuted = (spu->ctrl & 0x4000) != 0;
 
     for (int s = 0; s < num_samples; s++) {
-        int32_t mix_l = 0, mix_r = 0;
+        int32_t mix_l = 0, mix_r = 0, rev_in_l = 0, rev_in_r = 0;
         noise_tick(spu);
         int16_t prev_out = 0;
 
@@ -272,8 +343,10 @@ void ps1_spu_generate_samples(PS1SPU* spu, int16_t* output_stereo, int num_sampl
             adsr_tick(v);
             int32_t amp = (sample * v->adsr_level) >> 15;
             v->last_out = (int16_t)amp;
-            mix_l += (amp * vol_from_reg(v->vol_left_reg)) >> 15;
-            mix_r += (amp * vol_from_reg(v->vol_right_reg)) >> 15;
+            int32_t vl = (amp * vol_from_reg(v->vol_left_reg)) >> 15;
+            int32_t vr = (amp * vol_from_reg(v->vol_right_reg)) >> 15;
+            mix_l += vl; mix_r += vr;
+            if (spu->reverb_bits & (1u << vi)) { rev_in_l += vl; rev_in_r += vr; }
 
             uint32_t pitch = v->sample_rate;
             if (vi > 0 && (spu->pmon_bits & (1u << vi))) {
@@ -288,6 +361,19 @@ void ps1_spu_generate_samples(PS1SPU* spu, int16_t* output_stereo, int num_sampl
             }
             prev_out = v->last_out;
         }
+
+        // Reverb network runs at half rate; its output is interpolated between steps
+        if (!spu->rev_phase) {
+            spu->rev_prev_l = spu->rev_out_l; spu->rev_prev_r = spu->rev_out_r;
+            if (spu->ctrl & 0x80) reverb_step(spu, sat16(rev_in_l), sat16(rev_in_r), &spu->rev_out_l, &spu->rev_out_r);
+            else { spu->rev_out_l = spu->rev_out_r = 0; }
+            mix_l += ((spu->rev_prev_l + spu->rev_out_l) >> 1) * (int16_t)spu->regs[0x184 >> 1] >> 15;
+            mix_r += ((spu->rev_prev_r + spu->rev_out_r) >> 1) * (int16_t)spu->regs[0x186 >> 1] >> 15;
+        } else {
+            mix_l += spu->rev_out_l * (int16_t)spu->regs[0x184 >> 1] >> 15;
+            mix_r += spu->rev_out_r * (int16_t)spu->regs[0x186 >> 1] >> 15;
+        }
+        spu->rev_phase = !spu->rev_phase;
 
         mix_l = (mix_l * vol_from_reg(spu->main_vol_left)) >> 15;
         mix_r = (mix_r * vol_from_reg(spu->main_vol_right)) >> 15;
