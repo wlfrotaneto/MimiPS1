@@ -79,6 +79,7 @@ Following the modern wave of static recompilation architectures (such as *N64Rec
   * Full GPU command execution (`GP0` polygon rendering, line drawing, sprites/rectangles, texture sampling, CLUT palettes).
   * Color modulation with saturation safeguards (`(r * tr) >> 7`) and drop shadow rendering (`(0, 0, 0)` vertex modulations).
   * Texture window wrapping (`GP0(0xE2)`), 240p/480i overscan clipping, and VRAM-to-VRAM copy masking (`GP0(0x80..0x9F)`).
+  * Hardware-accurate PS1 15-bit color semi-transparency handling: `0x8000` (STP=1, RGB=0) treated as opaque black, eliminating transparent holes in menu textures.
   * Native 60 FPS synchronization aligned to macOS display refresh cycles (ProMotion ready).
 
 * **CoreAudio SPU Synthesis (`runtime/src/platform/macos_audio.m` & `runtime/src/mimips1_spu.c`):**
@@ -87,18 +88,22 @@ Following the modern wave of static recompilation architectures (such as *N64Rec
 
 * **CD-ROM & DMA Controller (`runtime/src/mimips1_cdrom.c` & `runtime/src/mimips1_dma.c`):**
   * Dual-format sector engine handling standard 2048-byte ISO sectors and raw 2352-byte disc images (Mode 2 Form 1).
-  * Paced sector delivery (`16384` cycles) with in-flight sector protection to prevent corruption of 64KB `.NSF` streaming chunks.
+  * Recursive ISO9660 directory lookup (up to depth 4) with device path prefix stripping (`cdrom:`, `sim:`, `c:\`), enabling games with multi-level folder hierarchies (such as Castlevania) to seamlessly load subfolder overlays (`BIN/`, `BOSS/`, `ST/`).
+  * Paced sector delivery (`16384` cycles) with in-flight sector protection and safe `BFRD` latching to prevent sector dropping during DMA3 streaming.
   * Exact `GetlocL` (0x10) and `GetlocP` (0x11) position tracking via `last_read_lba`.
-  * Multi-channel DMA transfers (GPU Linked-List Mode, CD-ROM DMA3 streaming with fallback).
+  * Multi-channel DMA transfers (GPU Linked-List Mode with bit 23 boundary check, immediate block mode vs slice mode word count differentiation).
 
-* **Official BIOS & HLE Dual Support (`runtime/src/mimips1_bios.c`):**
+* **Official BIOS & HLE Dual Support (`runtime/src/mimips1_bios.c` & `runtime/src/mimips1_cpu.c`):**
   * Automatic detection and execution of official PlayStation BIOS (`assets/bios.bin`).
-  * Built-in HLE fallback for critical Sony kernel syscall tables (`A0`, `B0`, `C0`).
+  * Low RAM kernel setup with standard Psy-Q B0 (`0x80000800`) and C0 (`0x80000C00`) jump tables.
+  * Built-in HLE implementations for Sony syscalls (`A0`, `B0`, `C0`), including standard memory allocators (`malloc`, `free`, `realloc`), math (`rand`, `srand`), strings (`memchr`), and filesystem (`firstfile`).
+  * Direct vector trapping for unmapped PC overlay code jumps into BIOS vectors.
 
 * **Memory Card Manager (`runtime/src/mimips1_card.c`):**
   * Dual 128KB memory card persistence in `~/Library/Application Support/MimiPS1/memcards/`.
 
-* **Automated Game Icon Pipeline (`tools/mimips1_pipeline.py`):**
+* **Automated Game Icon & Isolated Pipeline (`tools/mimips1_pipeline.py`):**
+  * **Isolated Builds:** Per-game intermediate build directories (`build/recompiled_<slug>/`) preventing multi-game artifact collisions.
   * **Tier 1:** Native disc extraction of PS1 Memory Card icons (`*ICON*.TIM`) with 16-color CLUT decoding and nearest-neighbor pixel art scaling.
   * **Tier 2:** Automatic online retrieval of official high-resolution boxart (512×512 / 1024×1024) via Libretro/GameTDB repositories.
   * **Tier 3:** Built-in conversion via macOS `sips` and `iconutil` directly into standalone `.icns` application icons.
@@ -208,9 +213,9 @@ open "build/Crash Bandicoot.app"
 | Title / Target | Serial | Recompilation | Video / GPU | Audio / SPU | Status |
 | :--- | :--- | :---: | :---: | :---: | :--- |
 | **Triangle Demo (Homebrew)** | N/A | ✅ Clean | ✅ Metal 60 FPS | N/A | **Fully Playable** |
-| **Crash Bandicoot** | `SCUS-94900` | ✅ Clean (820 funcs) | 🟡 Title Screen & 3D Model | 🟡 In progress | **Boots to Title Screen** (3D Crash & logo rendering, FS/memcard inited) |
-| **Cotton Original** | `SLPM-86461` | ✅ Clean (2133 funcs) | 🟡 Kernel & IRQ inited | 🟡 In progress | **Recompiled & Packaged** (Native icon extracted from disc) |
-| **Castlevania: Symphony of the Night** | `SLUS-00067` | ✅ Clean (518 funcs) | 🟡 Kernel & IRQ inited | 🟡 In progress | **Recompiled & Packaged** (CFG recursion capped, HD icon linked) |
+| **Crash Bandicoot** | `SCUS-94900` | ✅ Clean (820 funcs) | 🟡 Intro & 3D Title Scene | ✅ Audio Streaming | **Boots through Intro & Title Screen** (Naughty Dog banner, 3D doghouse, zero visual artifacts, audio streaming) |
+| **Cotton Original** | `SLPM-86461` | ✅ Clean (2133 funcs) | 🟡 Kernel & IRQ inited | 🟡 In progress | **Recompiled & Packaged** (Kernel & IRQ inited, native memory card icon extracted from disc) |
+| **Castlevania: Symphony of the Night** | `SLUS-00067` | ✅ Clean (518 funcs) | 🟡 Boot & Overlay Init | 🟡 In progress | **Boots & Loads Subfolder Overlays** (Loads `DRA.BIN`, `F_MAP.BIN`, and `F_TITLE0.BIN` via recursive ISO search) |
 
 ---
 
@@ -227,28 +232,36 @@ open "build/Crash Bandicoot.app"
 - [x] Accurate `HookEntryInt` (`B0:19`) & `ReturnFromException` (`B0:17`) clean stack unwinding preventing recursive Psy-Q ISR initialization
 - [x] Host-accurate `longjmp` (`A0:14`) PC restoration in AOT recompiled MIPS code
 - [x] Inverted Active High bitfield for `OutdatedPadGetButtons` (`B0:16`) preventing premature button press spam on boot
+- [x] Extended BIOS HLE library routines (`memchr`, `rand`, `srand`, `malloc`, `free`, `calloc`, `realloc`, `firstfile`)
+- [x] Unmapped PC interpreter fallback with direct BIOS vector dispatch (`0xA0`, `0xB0`, `0xC0`)
 - [x] Full GP0 `StoreImage` (`0xC0..0xDF`, VRAM-to-CPU) image transfer execution
 - [x] Synchronized `GPUSTAT` drawing mode bits 0..10 upon `GP0(0xE1)` and textured polygon draw commands
 - [x] GP1 `Get GPU Info` (`0x10`) query support and latch in `GPUREAD` (`0x1F801810`)
-- [x] Hardware-accurate DMA2 Linked List termination condition (Bit 23 `0x00800000`)
+- [x] Hardware-accurate DMA2 Linked List termination condition (Bit 23 `0x00800000` & zero header check)
+- [x] Immediate block mode (`sync_mode == 0`) vs slice mode (`sync_mode == 1`) DMA word count differentiation
 - [x] 60-frame heartbeat diagnostic telemetry in VBlank loop
 - [x] PS1 standard 12-word `setjmp` (`A0:13`) & `longjmp` (`A0:14`) context layout
 - [x] Basic MDEC MMIO (`0x1F801820` / `0x1F801824`) and DMA channel support preventing hang on FMV logos
 - [x] Full GTE vector coprocessor instruction pipeline with unit test suite
 - [x] Metal hardware-accelerated rasterization & 1024×512 VRAM pipeline
+- [x] Hardware-accurate PS1 15-bit color semi-transparency rule (`0x8000` = opaque black, fixing transparent holes in menus)
 - [x] Texture modulation saturation safeguards (`(r * tr) >> 7`) fixing black drop shadow corruptions
 - [x] Sprite clipping (`clip_x2 + 1`, `clip_y2 + 1`) and UV coordinate wrapping
 - [x] VRAM-to-VRAM copy coordinate masking (`GP0(0x80..0x9F)`)
 - [x] Dual-format disc sector parser (2048-byte ISO & 2352-byte RAW Mode 2 Form 1)
+- [x] Recursive ISO9660 subdirectory lookup (up to depth 4) with path prefix stripping (`BIN/`, `BOSS/`, `ST/`)
 - [x] CD-ROM BFRD request register & in-flight buffer protection preventing `.NSF` streaming chunk loss
+- [x] Non-destructive CD-ROM BFRD toggle preserving `data_bytes_avail` during DMA3 transfers
 - [x] Accurate `GetlocL` / `GetlocP` sub-channel positioning via `last_read_lba`
 - [x] Automated game icon pipeline (Disc TIM extraction + Libretro HD Boxart resolver)
+- [x] Isolated build directories per game (`build/recompiled_<slug>/`) in pipeline
 - [x] Zero-configuration pipeline with automatic title & BIOS detection
 - [x] macOS `.app` bundle builder & compressed UDZO `.dmg` packaging
 
 ### Active Research & Debugging
 - [ ] VRAM-to-VRAM background DMA copy synchronization for Crash title jungle backdrop
-- [ ] Investigate frame display synchronization on Cotton Original and Castlevania: SotN
+- [ ] Castlevania dynamic overlay function call dispatch (`F_TITLE0.BIN` unmapped indirect call target)
+- [ ] Investigate frame display synchronization on Cotton Original
 - [ ] ADPCM voice ADSR envelope curves & hardware reverberation buffers
 - [ ] Analog joystick mapping and rumble haptics via GameController framework
 
