@@ -49,6 +49,7 @@ struct PS1CPU {
     bool is_in_delay_slot;  // The instruction at pc sits in a branch delay slot
     uint32_t ld_reg;        // Pending (delayed) load: destination register, 0 = none
     uint32_t ld_val;
+    int  exc_level;         // Nesting of kernel exceptions in progress (raise ++, RFE --)
     bool hook_next;         // Last branch may land on a recompiled entry
     bool hook_pending;      // pc just landed via such a branch
     uint8_t entry_bits[PS1_RAM_SIZE / 4 / 8]; // 1 = word is the entry of a recompiled function

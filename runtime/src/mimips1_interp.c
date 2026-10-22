@@ -87,6 +87,7 @@ static void raise_exception(PS1Context* ctx, uint32_t code, uint32_t epc_pc, boo
     c->cop0[COP0_SR] = (sr & ~0x3Fu) | ((sr << 2) & 0x3Fu);
 
     uint32_t vec = (sr & SR_BEV) ? 0xBFC00180u : 0x80000080u;
+    c->exc_level++;
     c->pc = vec;
     c->next_pc = vec + 4;
     c->is_in_delay_slot = false;
@@ -141,7 +142,7 @@ static void interp_loop(PS1Context* ctx, uint32_t stop_pc, bool check_sp, uint32
             // A call or tail jump just landed on a recompiled function entry
             c->hook_pending = false;
             uint32_t off = (pc & 0x001FFFFC) >> 2;
-            if (ctx->native_enabled && (c->entry_bits[off >> 3] & (1u << (off & 7)))) {
+            if (ctx->native_enabled && c->exc_level == 0 && (c->entry_bits[off >> 3] & (1u << (off & 7)))) {
                 PS1RecompiledFunc fn = c->func_table[off];
                 if (fn) {
                     c->pc = pc;
@@ -293,6 +294,7 @@ static void interp_loop(PS1Context* ctx, uint32_t stop_pc, bool check_sp, uint32
             else if (sub == 0x10 && (insn & 0x3F) == 0x10) {                 // RFE
                 uint32_t sr = c->cop0[COP0_SR];
                 c->cop0[COP0_SR] = (sr & ~0x0Fu) | ((sr >> 2) & 0x0Fu);
+                if (c->exc_level > 0) c->exc_level--;
             }
             else EXC(EXC_RI, 0);
             break;
@@ -412,6 +414,7 @@ static void interp_kernel_entry(PS1Context* ctx, uint32_t code, uint32_t marker,
     bool saved_native = ctx->in_native;
     int saved_depth = ctx->interp_depth;
     bool saved_hook_next = c->hook_next, saved_hook_pending = c->hook_pending;
+    int saved_exc = c->exc_level;
 
     KernelEntry entry;
     entry.stop_pc = stop_pc;
@@ -435,6 +438,7 @@ static void interp_kernel_entry(PS1Context* ctx, uint32_t code, uint32_t marker,
     c->ld_val = saved_lval;
     c->hook_next = saved_hook_next;
     c->hook_pending = saved_hook_pending;
+    c->exc_level = saved_exc;
 }
 
 void ps1_interp_interrupt_from_native(PS1Context* ctx) {
