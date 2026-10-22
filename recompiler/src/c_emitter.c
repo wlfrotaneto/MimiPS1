@@ -272,8 +272,11 @@ bool mips_emit_c_code(const MipsProgram* prog, const EmitterOptions* opts) {
             int normal_insns = ends_with_delay ? (n - 2) : n;
 
             // Emit normal instructions in basic block
+            // Time advances one cycle per instruction, as in the interpreter (blocks entered
+            // through their first label are accounted in full)
             for (int i = 0; i < normal_insns; i++) {
-                fprintf(fc, "loc_%08x:\n", blk->insns[i].pc);
+                fprintf(fc, "loc_%08x:\n    PS1_STEP(0x%08X);\n", blk->insns[i].pc, blk->insns[i].pc);
+                if (i == 0) fprintf(fc, "    ctx->cycle_counter += %d;\n", n);
                 emit_instruction_c(fc, &blk->insns[i]);
             }
 
@@ -281,7 +284,8 @@ bool mips_emit_c_code(const MipsProgram* prog, const EmitterOptions* opts) {
                 const MipsInsn* br = &blk->insns[n - 2];
                 const MipsInsn* ds = &blk->insns[n - 1];
 
-                fprintf(fc, "loc_%08x:\n", br->pc);
+                fprintf(fc, "loc_%08x:\n    PS1_STEP(0x%08X);\n", br->pc, br->pc);
+                if (normal_insns == 0) fprintf(fc, "    ctx->cycle_counter += %d;\n", n);
 
                 // Conditional branches
                 if (br->is_branch) {
@@ -322,11 +326,11 @@ bool mips_emit_c_code(const MipsProgram* prog, const EmitterOptions* opts) {
                     }
 
                     fprintf(fc, "    _take_branch = %s;\n", cond_expr);
-                    fprintf(fc, "loc_%08x:\n", ds->pc);
+                    fprintf(fc, "ds_%08x:\n    PS1_STEP(0x%08X);\n", ds->pc, ds->pc);
                     emit_instruction_c(fc, ds); // Execute delay slot
                     if (br->target >= fn->entry_pc && br->target < fn->end_pc) {
                         if (br->target <= br->pc) {
-                            fprintf(fc, "    if (_take_branch) { ps1_cpu_tick(ctx, 32); goto loc_%08x; }\n", br->target);
+                            fprintf(fc, "    if (_take_branch) { ps1_cpu_tick(ctx, 0); goto loc_%08x; }\n", br->target);
                         } else {
                             fprintf(fc, "    if (_take_branch) goto loc_%08x;\n", br->target);
                         }
@@ -346,11 +350,11 @@ bool mips_emit_c_code(const MipsProgram* prog, const EmitterOptions* opts) {
                         fprintf(fc, "    _call_target = R(%u);\n", br->rs);
                     }
                     fprintf(fc, "    R(%u) = 0x%08X;\n", ret_reg, br->pc + 8);
-                    fprintf(fc, "loc_%08x:\n", ds->pc);
+                    fprintf(fc, "ds_%08x:\n    PS1_STEP(0x%08X);\n", ds->pc, ds->pc);
                     emit_instruction_c(fc, ds); // Execute delay slot
                     if (br->id == MIPS_OP_JAL) {
                         if (is_func_in_program(prog, br->target)) {
-                            fprintf(fc, "    ps1_func_%08x(ctx);\n", br->target);
+                            fprintf(fc, "    PS1_CALL(0x%08X, ps1_func_%08x);\n", br->target, br->target);
                         } else {
                             fprintf(fc, "    CALL_INDIRECT(0x%08X);\n", br->target);
                         }
@@ -360,21 +364,21 @@ bool mips_emit_c_code(const MipsProgram* prog, const EmitterOptions* opts) {
                 }
                 // Return (JR $ra)
                 else if (br->is_return) {
-                    fprintf(fc, "loc_%08x:\n", ds->pc);
+                    fprintf(fc, "ds_%08x:\n    PS1_STEP(0x%08X);\n", ds->pc, ds->pc);
                     emit_instruction_c(fc, ds); // Execute delay slot
                     if (ra_local) {
-                        fprintf(fc, "    ctx->cpu.pc = R(31);\n    ps1_cpu_tick(ctx, 32);\n    goto dispatch_ret;\n");
+                        fprintf(fc, "    ctx->cpu.pc = R(31);\n    ps1_cpu_tick(ctx, 0);\n    goto dispatch_ret;\n");
                     } else {
                         fprintf(fc, "    return;\n");
                     }
                 }
                 // Unconditional Jump (J)
                 else if (br->id == MIPS_OP_J) {
-                    fprintf(fc, "loc_%08x:\n", ds->pc);
+                    fprintf(fc, "ds_%08x:\n    PS1_STEP(0x%08X);\n", ds->pc, ds->pc);
                     emit_instruction_c(fc, ds); // Execute delay slot
                     if (br->target >= fn->entry_pc && br->target < fn->end_pc) {
                         if (br->target <= br->pc) {
-                            fprintf(fc, "    ps1_cpu_tick(ctx, 32);\n");
+                            fprintf(fc, "    ps1_cpu_tick(ctx, 0);\n");
                         }
                         fprintf(fc, "    goto loc_%08x;\n", br->target);
                     } else {
@@ -385,13 +389,22 @@ bool mips_emit_c_code(const MipsProgram* prog, const EmitterOptions* opts) {
                 // Indirect Jump (JR $reg, e.g. switch jump tables)
                 else if (br->id == MIPS_OP_JR) {
                     fprintf(fc, "    _jr_target = R(%u);\n", br->rs);
-                    fprintf(fc, "loc_%08x:\n", ds->pc);
+                    fprintf(fc, "ds_%08x:\n    PS1_STEP(0x%08X);\n", ds->pc, ds->pc);
                     emit_instruction_c(fc, ds);
                     // Jump-table loops have no other tick point: advance time here too
                     fprintf(fc, "    ctx->cpu.pc = _jr_target;\n");
-                    fprintf(fc, "    ps1_cpu_tick(ctx, 32);\n");
+                    fprintf(fc, "    ps1_cpu_tick(ctx, 0);\n");
                     fprintf(fc, "    goto dispatch_entry;\n");
                 }
+
+                // The delay-slot instruction is also reachable on its own (branch target, function
+                // pointer): give it a standalone copy that continues with the next block, so the
+                // jump-in does not execute the preceding branch's "taken" test.
+                bool falls = br->is_branch || br->is_call;
+                if (falls) fprintf(fc, "    goto skip_%08x;\n", ds->pc);
+                fprintf(fc, "loc_%08x:\n    PS1_STEP(0x%08X);\n", ds->pc, ds->pc);
+                emit_instruction_c(fc, ds);
+                if (falls) fprintf(fc, "skip_%08x:\n", ds->pc);
             }
 
             blk = blk->next;

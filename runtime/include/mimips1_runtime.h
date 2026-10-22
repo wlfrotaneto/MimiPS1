@@ -104,6 +104,7 @@ bool        ps1_runtime_load_exe(PS1Context* ctx, const char* exe_path);
 // Recompiled code is only trusted while RAM still holds the original instructions
 void        ps1_native_check_range(PS1Context* ctx, uint32_t addr, uint32_t bytes);
 void        ps1_native_try_enable(PS1Context* ctx);
+bool        ps1_native_entry_allowed(uint32_t pc);
 
 // Boot through the real BIOS ROM at the reset vector / run the emulation thread
 void        ps1_runtime_boot_bios(PS1Context* ctx);
@@ -150,6 +151,20 @@ uint64_t    macos_audio_get_underruns(void);
 #define MEM_SWR(a, v)   ps1_mem_swr(ctx, (a), (v))
 
 #define CALL_INDIRECT(t) ps1_call_indirect(ctx, (t))
+
+// Direct call of a recompiled function. PS1_VERIFY builds run each (sampled) call a second time in
+// the interpreter from the same state and report any divergence (MIMIPS1_VERIFY=<first frame>).
+#ifdef PS1_VERIFY
+#include <stdio.h>
+extern FILE* ps1_step_file;
+void ps1_step_print(PS1Context* ctx, uint32_t pc);
+#define PS1_STEP(pc) do { if (ps1_step_file) ps1_step_print(ctx, (pc)); } while (0)
+void ps1_verify_call(PS1Context* ctx, uint32_t addr, PS1RecompiledFunc fn);
+#define PS1_CALL(addr, fn) ps1_verify_call(ctx, (addr), (fn))
+#else
+#define PS1_STEP(pc) ((void)0)
+#define PS1_CALL(addr, fn) fn(ctx)
+#endif
 
 // Optional function-entry tracing (build with -DPS1_TRACE; MIMIPS1_TRACE=addr,addr,... at runtime)
 #ifdef PS1_TRACE

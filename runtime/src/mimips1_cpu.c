@@ -78,7 +78,7 @@ static void report_unmapped_call(PS1Context* ctx, uint32_t target_pc) {
 void ps1_call_indirect(PS1Context* ctx, uint32_t target_pc) {
     if (target_pc == 0 || target_pc == 0xFFFFFFFF || (target_pc < 0x1000 && target_pc != 0xA0 && target_pc != 0xB0 && target_pc != 0xC0)) return; // Guard against null or invalid function pointer calls
 
-    ps1_cpu_tick(ctx, 32);
+    ps1_cpu_tick(ctx, 2);
 
     uint32_t masked = target_pc & 0x1FFFFFFF;
     if (!ctx->bios_boot) {
@@ -91,11 +91,11 @@ void ps1_call_indirect(PS1Context* ctx, uint32_t target_pc) {
     uint32_t offset = (target_pc & 0x001FFFFC) >> 2;
     if (__builtin_expect(offset < PS1_FUNC_TABLE_SIZE, 1) && (masked < PS1_RAM_SIZE || masked >= 0x00200000) && masked < 0x00800000) {
         PS1RecompiledFunc fn = ctx->cpu.func_table[offset];
-        if (fn && ctx->native_enabled) {
+        if (fn && ctx->native_enabled && ps1_native_entry_allowed(target_pc)) {
             ctx->cpu.pc = target_pc;
             bool saved_native = ctx->in_native;
             ctx->in_native = true;
-            fn(ctx);
+            PS1_CALL(target_pc, fn);
             ctx->in_native = saved_native;
             return;
         }

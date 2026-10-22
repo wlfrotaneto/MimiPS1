@@ -236,7 +236,13 @@ static void irq_deliver_bit(PS1Context* ctx, uint32_t bit) {
 // bounded to keep a misbehaving guest from recursing without limit.
 #define IRQ_MAX_DEPTH 3
 
+#ifdef PS1_VERIFY
+static int s_verify_depth;
+#endif
 void ps1_irq_poll(PS1Context* ctx) {
+#ifdef PS1_VERIFY
+    if (s_verify_depth) return;
+#endif
     irq_update_cause(ctx);
     if (ctx->bios_boot) {
         // The real kernel dispatches interrupts. The interpreter takes them itself; native
@@ -539,4 +545,110 @@ void ps1_native_try_enable(PS1Context* ctx) {
     ctx->native_enabled = true;
     ps1_native_check_range(ctx, ctx->exe_text_addr & 0x1FFFFFFF, ctx->exe_text_size);
     printf("[MimiPS1] Boot executable verified: running recompiled code natively\n");
+}
+
+#ifdef PS1_VERIFY
+// Differential check: run `fn` natively, then the same call in the interpreter on a copy of the
+// pre-call state, and compare registers, GTE and RAM. Only a sample of calls is checked and
+// checks never nest, so a divergence points at the function that was sampled.
+FILE* ps1_step_file;
+void ps1_step_print(PS1Context* ctx, uint32_t pc) {
+    fprintf(ps1_step_file, "%08X", pc);
+    for (int i = 1; i < 32; i++) if (i != 26 && i != 27) fprintf(ps1_step_file, " %08X", ctx->cpu.r[i]);
+    fprintf(ps1_step_file, " %08X %08X\n", ctx->cpu.hi, ctx->cpu.lo);
+}
+static PS1Context* s_shadow;
+static uint8_t* s_pre_ram;
+static uint32_t s_rng = 12345;
+
+void ps1_verify_call(PS1Context* ctx, uint32_t addr, PS1RecompiledFunc fn) {
+    static long first_frame = -2, every = 1, reports = 0;
+    if (first_frame == -2) {
+        const char* e = getenv("MIMIPS1_VERIFY");
+        first_frame = e ? atol(e) : -1;
+        const char* n = getenv("MIMIPS1_VERIFY_EVERY");
+        every = n ? atol(n) : 40;
+        if (every < 1) every = 1;
+    }
+    static long only_fn = -2;
+    if (only_fn == -2) { const char* f = getenv("MIMIPS1_VERIFY_FN"); only_fn = f ? (long)strtoul(f, NULL, 16) : -1; }
+    s_rng = s_rng * 1664525u + 1013904223u;
+    if ((only_fn != -1 && (uint32_t)only_fn != addr) || first_frame < 0 || s_verify_depth || !ctx->native_enabled || (long)ctx->frame_count < first_frame ||
+        ((s_rng >> 8) % every) != 0 || reports >= 400 || ctx->cpu.exc_level != 0) {
+        fn(ctx);
+        return;
+    }
+    PS1Context* sh = s_shadow;
+    if (!sh) {
+        sh = s_shadow = (PS1Context*)malloc(sizeof(PS1Context));
+        memcpy(sh, ctx, sizeof(PS1Context));
+        sh->memory.ram_base = sh->memory.ram;
+        sh->native_enabled = false;
+        sh->in_native = false;
+        sh->next_vblank_cycle = ~0ull;
+    }
+    // Cheap per-call sync of everything the interpreter can observe or change in the function
+    memcpy(sh->memory.ram, ctx->memory.ram, PS1_RAM_SIZE);
+    memcpy(sh->memory.scratchpad, ctx->memory.scratchpad, sizeof(ctx->memory.scratchpad));
+    memcpy(sh->cpu.r, ctx->cpu.r, sizeof(ctx->cpu.r));
+    memcpy(sh->cpu.cop0, ctx->cpu.cop0, sizeof(ctx->cpu.cop0));
+    sh->cpu.hi = ctx->cpu.hi; sh->cpu.lo = ctx->cpu.lo; sh->cpu.exc_level = 0;
+    sh->gte = ctx->gte; sh->cdrom = ctx->cdrom; sh->timers = ctx->timers; sh->input = ctx->input;
+    sh->dma = ctx->dma; sh->mdec = ctx->mdec; sh->bios = ctx->bios;
+    sh->irq_stat = ctx->irq_stat; sh->irq_mask = 0;
+    sh->cycle_counter = ctx->cycle_counter; sh->last_sched_cycle = ctx->cycle_counter;
+    sh->cpu.cop0[COP0_SR] &= ~(uint32_t)SR_IEc;
+    sh->cpu.ld_reg = 0;
+    uint32_t pre_regs[32]; memcpy(pre_regs, ctx->cpu.r, sizeof(pre_regs));
+
+    static int step_fn = -2;
+    if (step_fn == -2) step_fn = getenv("MIMIPS1_STEP_FN") ? 1 : 0;
+    bool stepping = step_fn == 1 && only_fn == (long)addr;
+    s_verify_depth++;
+    if (stepping) ps1_step_file = fopen("/tmp/step_native.txt", "w");
+    fn(ctx);
+    if (stepping) { fclose(ps1_step_file); ps1_step_file = NULL; }
+    s_verify_depth--;
+
+    sh->cpu.pc = addr;
+    if (stepping) ps1_step_file = fopen("/tmp/step_interp.txt", "w");
+    ps1_interp_call(sh, addr);
+    if (stepping) { fclose(ps1_step_file); ps1_step_file = NULL; }
+
+    // Functions that do not unwind to their caller (tail-jump chains, kernel entries) are not comparable
+    if (ctx->cpu.r[29] != pre_regs[29] || sh->cpu.r[29] != pre_regs[29]) return;
+    char diff[512]; int dl = 0; diff[0] = 0;
+    for (int i = 1; i < 32; i++) {
+        if (i == 26 || i == 27) continue;
+        if (ctx->cpu.r[i] != sh->cpu.r[i]) dl += snprintf(diff + dl, sizeof(diff) - dl, " r%d native=%08X interp=%08X;", i, ctx->cpu.r[i], sh->cpu.r[i]);
+    }
+    if (ctx->cpu.hi != sh->cpu.hi || ctx->cpu.lo != sh->cpu.lo) dl += snprintf(diff + dl, sizeof(diff) - dl, " hi/lo native=%08X/%08X interp=%08X/%08X;", ctx->cpu.hi, ctx->cpu.lo, sh->cpu.hi, sh->cpu.lo);
+    if (memcmp(&ctx->gte, &sh->gte, sizeof(PS1GTE)) != 0) dl += snprintf(diff + dl, sizeof(diff) - dl, " GTE state differs;");
+    int ram_diffs = 0; uint32_t first_ram = 0;
+    for (uint32_t a = 0x10000; a < PS1_RAM_SIZE; a += 4) {
+        if (*(uint32_t*)&ctx->memory.ram[a] != *(uint32_t*)&sh->memory.ram[a]) {
+            if (!ram_diffs++) first_ram = a;
+        }
+    }
+    if (dl || ram_diffs) {
+        reports++;
+        if (stepping) { printf("[VERIFY] steps saved\n"); fflush(stdout); exit(0); }
+        printf("[VERIFY] frame %llu fn %08X (ra=%08X a0=%08X a1=%08X a2=%08X): %s ram_diff_words=%d first=%08X native=%08X interp=%08X\n",
+               (unsigned long long)ctx->frame_count, addr, pre_regs[31], pre_regs[4], pre_regs[5], pre_regs[6], diff, ram_diffs, first_ram + 0x80000000u,
+               ram_diffs ? *(uint32_t*)&ctx->memory.ram[first_ram] : 0, ram_diffs ? *(uint32_t*)&sh->memory.ram[first_ram] : 0);
+        fflush(stdout);
+    }
+}
+#endif
+
+// Debug aid for bisecting native-code bugs: MIMIPS1_NATIVE_RANGE=lo-hi (hex) lets only functions
+// entered at an address in [lo, hi) run natively from the interpreter / indirect calls.
+bool ps1_native_entry_allowed(uint32_t pc) {
+    static uint32_t lo = 0, hi = 0xFFFFFFFF; static int init;
+    if (!init) {
+        init = 1;
+        const char* e = getenv("MIMIPS1_NATIVE_RANGE");
+        if (e) { char* end; lo = (uint32_t)strtoul(e, &end, 16); if (*end == '-') hi = (uint32_t)strtoul(end + 1, NULL, 16); }
+    }
+    return pc >= lo && pc < hi;
 }

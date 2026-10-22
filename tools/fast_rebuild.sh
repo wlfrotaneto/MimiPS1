@@ -6,9 +6,9 @@ R="$(cd "$(dirname "$0")/.." && pwd)"
 slug="$1"; app="$2"
 d="$R/build/recompiled_$slug"
 cache="$R/build/.fastcache"; mkdir -p "$cache"
-CF="-DPS1_TRACE -O2 -arch arm64 -fobjc-arc -I$R/runtime/include -I$R/recompiler/include -I$d -Wno-everything"
+CF="-DPS1_TRACE ${PS1_VERIFY:+-DPS1_VERIFY} -O2 -arch arm64 -fobjc-arc -I$R/runtime/include -I$R/recompiler/include -I$d -Wno-everything"
 # The cached object depends on runtime headers (struct layouts): rebuild it when any header is newer
-obj="$cache/$slug.o"
+obj="$cache/$slug${PS1_VERIFY:+.v}.o"
 if [ ! -f "$obj" ] || [ -n "$(find "$R/runtime/include" "$d/recompiled_game.c" -newer "$obj" -print -quit)" ]; then
   clang $CF -c "$d/recompiled_game.c" -o "$obj"
 fi

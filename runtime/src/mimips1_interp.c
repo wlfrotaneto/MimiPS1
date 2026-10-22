@@ -142,9 +142,11 @@ static void interp_loop(PS1Context* ctx, uint32_t stop_pc, bool check_sp, uint32
             // A call or tail jump just landed on a recompiled function entry
             c->hook_pending = false;
             uint32_t off = (pc & 0x001FFFFC) >> 2;
-            if (ctx->native_enabled && c->exc_level == 0 && (c->entry_bits[off >> 3] & (1u << (off & 7)))) {
+            if (ctx->native_enabled && c->exc_level == 0 && ps1_native_entry_allowed(pc) && (c->entry_bits[off >> 3] & (1u << (off & 7)))) {
                 PS1RecompiledFunc fn = c->func_table[off];
                 if (fn) {
+                    // A load issued in the call's delay slot completes before the callee's code runs on
+                    if (c->ld_reg) { r[c->ld_reg] = c->ld_val; c->ld_reg = 0; r[0] = 0; }
                     c->pc = pc;
                     bool saved_native = ctx->in_native;
                     ctx->in_native = true;
@@ -175,6 +177,13 @@ static void interp_loop(PS1Context* ctx, uint32_t stop_pc, bool check_sp, uint32
         uint32_t npc = c->next_pc;
         bool in_ds = c->is_in_delay_slot;
         uint32_t insn = ps1_mem_read32(ctx, pc);
+#ifdef PS1_VERIFY
+        if (__builtin_expect(ps1_step_file != NULL, 0)) {
+            uint32_t sv = c->r[c->ld_reg & 31]; if (c->ld_reg) c->r[c->ld_reg] = c->ld_val;
+            ps1_step_print(ctx, pc);
+            if (c->ld_reg) c->r[c->ld_reg] = sv;
+        }
+#endif
         if (__builtin_expect(s_pc_trace, 0)) {
             s_pc_ring[s_pc_ring_pos][0] = pc;
             s_pc_ring[s_pc_ring_pos][1] = insn;
