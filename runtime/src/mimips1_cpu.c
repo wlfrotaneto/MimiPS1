@@ -7,7 +7,7 @@
 void ps1_cpu_init(PS1Context* ctx) {
     memset(&ctx->cpu, 0, sizeof(PS1CPU));
     ctx->cpu.cop0[COP0_PRID] = 0x00000002; // R3000A
-    ctx->cpu.cop0[COP0_SR]   = 0x10900000; // Normal status (Coprocessors enabled)
+    ctx->cpu.cop0[COP0_SR]   = 0x50000401; // CU0|CU2, IM2 (hardware IRQ) unmasked, IEc set: state a game sees after BIOS boot
 }
 
 void ps1_cpu_reset(PS1Context* ctx) {
@@ -18,7 +18,7 @@ void ps1_cpu_reset(PS1Context* ctx) {
     memcpy(ctx->cpu.func_table, preserved_table, sizeof(preserved_table));
 
     ctx->cpu.cop0[COP0_PRID] = 0x00000002;
-    ctx->cpu.cop0[COP0_SR]   = 0x10900000;
+    ctx->cpu.cop0[COP0_SR]   = 0x50000401;
 }
 
 void ps1_register_function(PS1Context* ctx, uint32_t mips_addr, PS1RecompiledFunc func) {
@@ -174,8 +174,8 @@ static void ps1_interpret_fallback(PS1Context* ctx, uint32_t start_pc) {
             continue;
         }
 
-        if (++insn_count % 64 == 0) {
-            ps1_cpu_tick(ctx, 32);
+        if (++insn_count % 16 == 0) {
+            ps1_cpu_tick(ctx, 16);
             if (!ctx->running) break;
         }
 
@@ -351,7 +351,10 @@ void ps1_call_indirect(PS1Context* ctx, uint32_t target_pc) {
 }
 
 void ps1_trigger_syscall(PS1Context* ctx) {
-    if (!ps1_bios_handle_syscall(ctx)) {
+    if (ps1_bios_handle_syscall(ctx)) {
+        // ExitCriticalSection may have unmasked a pending interrupt
+        ps1_irq_poll(ctx);
+    } else {
         // Fallback standard exception
         ctx->cpu.cop0[COP0_EPC] = ctx->cpu.pc;
         ctx->cpu.cop0[COP0_CAUSE] = (8 << 2); // Syscall exception code

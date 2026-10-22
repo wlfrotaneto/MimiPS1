@@ -58,10 +58,13 @@ struct PS1Context {
     uint32_t    cycles_since_vblank;
     bool        in_tick;
     bool        in_irq;
+    int         irq_depth;          // Nesting level of guest interrupt callbacks
     jmp_buf     irq_env;
     bool        in_irq_handler;
-    uint64_t    start_time_ns;
+    uint64_t    start_time_ns;      // Wall-clock origin used only for 60 Hz frame pacing
     uint64_t    next_vblank_cycle;
+    uint64_t    last_sched_cycle;   // Cycle count at which hardware was last advanced
+    bool        unthrottled;        // MIMIPS1_UNTHROTTLED=1: skip real-time frame pacing
 
     // Executable bounds
     uint32_t    exe_text_addr;
@@ -91,8 +94,13 @@ bool        ps1_runtime_load_exe(PS1Context* ctx, const char* exe_path);
 // Run a single video frame (~1/60th second, ~564,480 CPU cycles)
 void        ps1_runtime_run_frame(PS1Context* ctx);
 
-// Hardware Interrupt trigger
+// Latch an interrupt source into I_STAT. Never runs guest code: delivery to
+// handlers happens at safe points via ps1_irq_poll().
 void        ps1_trigger_irq(PS1Context* ctx, uint32_t irq_bit);
+
+// Deliver pending interrupts if (I_STAT & I_MASK) != 0 and SR.IEc/IM2 allow it.
+// Must only be called at an instruction boundary of guest code.
+void        ps1_irq_poll(PS1Context* ctx);
 
 // Advance CPU and hardware subsystem cycles deterministically
 void        ps1_cpu_tick(PS1Context* ctx, uint32_t cycles);

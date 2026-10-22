@@ -189,6 +189,11 @@ void ps1_mmio_write(PS1Context* ctx, uint32_t addr, uint32_t val, int size) {
         }
     } else if (addr == 0x1F801074) {
         ctx->irq_mask = val;
+        if (ctx->irq_stat & ctx->irq_mask) {
+            ctx->cpu.cop0[COP0_CAUSE] |= (1 << 10);
+        } else {
+            ctx->cpu.cop0[COP0_CAUSE] &= ~(1 << 10);
+        }
     }
     // GPU Registers
     else if (addr == 0x1F801810) {

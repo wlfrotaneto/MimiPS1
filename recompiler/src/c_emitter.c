@@ -361,7 +361,9 @@ bool mips_emit_c_code(const MipsProgram* prog, const EmitterOptions* opts) {
                     fprintf(fc, "    _jr_target = R(%u);\n", br->rs);
                     fprintf(fc, "loc_%08x:\n", ds->pc);
                     emit_instruction_c(fc, ds);
+                    // Jump-table loops have no other tick point: advance time here too
                     fprintf(fc, "    ctx->cpu.pc = _jr_target;\n");
+                    fprintf(fc, "    ps1_cpu_tick(ctx, 32);\n");
                     fprintf(fc, "    goto dispatch_entry;\n");
                 }
             }
