@@ -72,7 +72,9 @@ struct PS1Context {
     uint64_t    start_time_ns;      // Wall-clock origin used only for 60 Hz frame pacing
     uint64_t    next_vblank_cycle;
     uint64_t    last_sched_cycle;   // Cycle count at which hardware was last advanced
-    uint32_t    cpi;                // average cycles per instruction x2 (MIMIPS1_CPI, default 1.5)
+    uint32_t    cpi_base, cpi_boost;   // boost: slower CPU for ~10 s after a memory card access (title profile)
+    uint64_t    cpi_boost_until;
+    uint32_t    cpi;                // average cycles per instruction x2 (MIMIPS1_CPI, default 1.0)
     bool        unthrottled;        // MIMIPS1_UNTHROTTLED=1: skip real-time frame pacing
 
     // Executable bounds

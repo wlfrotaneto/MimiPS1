@@ -291,7 +291,7 @@ open "build/Crash Bandicoot.app"
 | `MIMIPS1_DUMP_FRAMES / _EVERY / _FROM` | Dump VRAM to `/tmp/vram_frame_N.ppm` (`tools/vram2png.py` crops/converts) |
 | `MIMIPS1_AUDIO_STATS=1` | Once a second: output peak, active voices, XA frames queued |
 | `MIMIPS1_PRESENT_DUMP=<n>` / `MIMIPS1_PRESENT_EVERY=<k>` | Write the frame the Metal presenter actually shows to `/tmp/present*.ppm` |
-| `MIMIPS1_CPI=<n>` | Average cycles per instruction (default 1.5, may be fractional; games time out polling loops by iteration count) |
+| `MIMIPS1_CPI=<n>` | Average cycles per instruction (default 1.0, may be fractional; games time out polling loops by iteration count) |
 | `MIMIPS1_NONATIVE=1` | Run everything in the interpreter (reference behaviour for comparing with recompiled code) |
 | `MIMIPS1_NATIVE_RANGE=lo-hi` | Hex address range of functions allowed to run natively (bisect native-code bugs) |
 | `PS1_VERIFY=1 tools/fast_rebuild.sh ...` + `MIMIPS1_VERIFY=<frame>`, `_EVERY`, `_FN`, `MIMIPS1_STEP_FN` | Differential checker: sampled native calls are re-run in the interpreter and compared; `STEP_FN` writes per-instruction traces to `/tmp/step_*.txt` |

@@ -210,14 +210,25 @@ void ps1_gpu_draw_triangle(PS1GPU* gpu, const PS1Vertex* v0, const PS1Vertex* v1
     int area = (v1->x - v0->x) * (v2->y - v0->y) - (v1->y - v0->y) * (v2->x - v0->x);
     if (area == 0) return;
 
+    // Top-left fill rule: pixels exactly on a right/bottom edge belong to the neighbouring triangle
+    // (otherwise shared edges are drawn twice and textures sample one texel past their rectangle)
+    const PS1Vertex* ea[3] = { v1, v2, v0 };
+    const PS1Vertex* eb[3] = { v2, v0, v1 };
+    bool top_left[3];
+    for (int i = 0; i < 3; i++) {
+        int dx = eb[i]->x - ea[i]->x, dy = eb[i]->y - ea[i]->y;
+        if (area < 0) { dx = -dx; dy = -dy; }
+        top_left[i] = dy < 0 || (dy == 0 && dx > 0);
+    }
+
     for (int y = min_y; y <= max_y; y++) {
         for (int x = min_x; x <= max_x; x++) {
             int w0 = (v1->x - x) * (v2->y - y) - (v1->y - y) * (v2->x - x);
             int w1 = (v2->x - x) * (v0->y - y) - (v2->y - y) * (v0->x - x);
             int w2 = (v0->x - x) * (v1->y - y) - (v0->y - y) * (v1->x - x);
 
-            if ((area > 0 && w0 >= 0 && w1 >= 0 && w2 >= 0) ||
-                (area < 0 && w0 <= 0 && w1 <= 0 && w2 <= 0)) {
+            int s0 = area > 0 ? w0 : -w0, s1 = area > 0 ? w1 : -w1, s2 = area > 0 ? w2 : -w2;
+            if ((s0 > 0 || (s0 == 0 && top_left[0])) && (s1 > 0 || (s1 == 0 && top_left[1])) && (s2 > 0 || (s2 == 0 && top_left[2]))) {
                 
                 uint8_t r = v0->r, g = v0->g, b = v0->b;
                 if (gouraud) {
