@@ -146,8 +146,19 @@ void ps1_mem_swr(PS1Context* ctx, uint32_t addr, uint32_t val) {
     ps1_mem_write32(ctx, addr & ~3, res);
 }
 
+static inline bool mmio_word_reg(uint32_t addr) {
+    return (addr >= 0x1F801070 && addr <= 0x1F801077) || (addr >= 0x1F801080 && addr <= 0x1F8010FF);
+}
+
 uint32_t ps1_mmio_read(PS1Context* ctx, uint32_t addr, int size) {
     ps1_cpu_tick(ctx, 32);
+
+    // Byte / halfword / unaligned access to 32-bit registers (interrupt controller, DMA)
+    if (mmio_word_reg(addr) && (size < 4 || (addr & 3))) {
+        uint32_t word = ps1_mmio_read(ctx, addr & ~3u, 4);
+        uint32_t shifted = word >> ((addr & 3) * 8);
+        return size == 1 ? (shifted & 0xFF) : size == 2 ? (shifted & 0xFFFF) : shifted;
+    }
 
     // Interrupt Controller
     if (addr == 0x1F801070) {
@@ -193,6 +204,18 @@ uint32_t ps1_mmio_read(PS1Context* ctx, uint32_t addr, int size) {
 }
 
 void ps1_mmio_write(PS1Context* ctx, uint32_t addr, uint32_t val, int size) {
+    // Partial writes to 32-bit registers update only the addressed bytes. Acknowledge-style bits
+    // (I_STAT is AND-ed, DICR flags are write-1-to-clear) stay untouched outside the written bytes.
+    if (mmio_word_reg(addr) && (size < 4 || (addr & 3))) {
+        uint32_t base = addr & ~3u;
+        int shift = (addr & 3) * 8;
+        uint32_t mask = (size == 1 ? 0xFFu : size == 2 ? 0xFFFFu : 0xFFFFFFFFu) << shift;
+        uint32_t cur = ps1_mmio_read(ctx, base, 4);
+        if (base == 0x1F801070) cur = 0xFFFFFFFFu;          // I_STAT: unwritten bits keep their value
+        else if (base == 0x1F8010F4) cur &= 0x00FFFFFFu;    // DICR: do not acknowledge flags
+        ps1_mmio_write(ctx, base, (cur & ~mask) | ((val << shift) & mask), 4);
+        return;
+    }
     // Interrupt Controller
     if (addr == 0x1F801070) {
         // Acknowledge IRQ bits (write 0 to acknowledge, or AND)

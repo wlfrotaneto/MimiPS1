@@ -103,13 +103,49 @@ static const char* metal_shader_src =
 
     // Convert PS1 BGR555 VRAM to 32-bit BGRA host framebuffer (using front_vram snapshot for tear-free rendering)
     const uint16_t (*source_vram)[PS1_VRAM_WIDTH] = _context->gpu.front_disp_w > 0 ? _context->gpu.front_vram : _context->gpu.vram;
-    for (int y = 0; y < PS1_VRAM_HEIGHT; y++) {
-        for (int x = 0; x < PS1_VRAM_WIDTH; x++) {
-            uint16_t c = source_vram[y][x];
-            uint8_t r = (uint8_t)(((c >> 0)  & 0x1F) << 3);
-            uint8_t g = (uint8_t)(((c >> 5)  & 0x1F) << 3);
-            uint8_t b = (uint8_t)(((c >> 10) & 0x1F) << 3);
-            _rgba_buffer[y * PS1_VRAM_WIDTH + x] = ((uint32_t)r << 16) | ((uint32_t)g << 8) | b | 0xFF000000;
+    bool is24 = _context->gpu.front_disp_w > 0 && _context->gpu.front_is_24bit;
+    int fx = _context->gpu.front_disp_x, fy = _context->gpu.front_disp_y;
+    int fw = _context->gpu.front_disp_w, fh = _context->gpu.front_disp_h;
+    if (is24) {
+        // 24-bit display (FMV): three bytes per pixel straight out of VRAM, drawn at the texture origin
+        for (int y = 0; y < fh && y < PS1_VRAM_HEIGHT; y++) {
+            const uint8_t* row = (const uint8_t*)source_vram[(fy + y) & (PS1_VRAM_HEIGHT - 1)];
+            for (int x = 0; x < fw && x < PS1_VRAM_WIDTH; x++) {
+                int off = (fx * 2 + x * 3) & (PS1_VRAM_WIDTH * 2 - 1);
+                uint8_t r = row[off], g = row[(off + 1) & (PS1_VRAM_WIDTH * 2 - 1)], b = row[(off + 2) & (PS1_VRAM_WIDTH * 2 - 1)];
+                _rgba_buffer[y * PS1_VRAM_WIDTH + x] = ((uint32_t)r << 16) | ((uint32_t)g << 8) | b | 0xFF000000;
+            }
+        }
+    } else {
+        for (int y = 0; y < PS1_VRAM_HEIGHT; y++) {
+            for (int x = 0; x < PS1_VRAM_WIDTH; x++) {
+                uint16_t c = source_vram[y][x];
+                uint8_t r = (uint8_t)(((c >> 0)  & 0x1F) << 3);
+                uint8_t g = (uint8_t)(((c >> 5)  & 0x1F) << 3);
+                uint8_t b = (uint8_t)(((c >> 10) & 0x1F) << 3);
+                _rgba_buffer[y * PS1_VRAM_WIDTH + x] = ((uint32_t)r << 16) | ((uint32_t)g << 8) | b | 0xFF000000;
+            }
+        }
+    }
+
+    {   // MIMIPS1_PRESENT_DUMP=<n>: write the presented frame number n as /tmp/present.ppm (debug aid)
+        static int dump_at = -2, frame_no = 0;
+        if (dump_at == -2) { const char* e = getenv("MIMIPS1_PRESENT_DUMP"); dump_at = e ? atoi(e) : -1; }
+        static int every = -2;
+        if (every == -2) { const char* e = getenv("MIMIPS1_PRESENT_EVERY"); every = e ? atoi(e) : 0; }
+        ++frame_no;
+        if ((dump_at >= 0 && frame_no == dump_at) || (every > 0 && frame_no % every == 0 && frame_no >= dump_at)) {
+            char path[64]; snprintf(path, sizeof(path), every > 0 ? "/tmp/present_%d.ppm" : "/tmp/present.ppm", frame_no);
+            int w = is24 ? fw : fw, h = fh; int ox = is24 ? 0 : fx, oy = is24 ? 0 : fy;
+            FILE* f = fopen(path, "wb");
+            if (f) {
+                fprintf(f, "P6\n%d %d\n255\n", w, h);
+                for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) {
+                    uint32_t px = _rgba_buffer[((oy + y) & 511) * PS1_VRAM_WIDTH + ((ox + x) & 1023)];
+                    fputc((px >> 16) & 255, f); fputc((px >> 8) & 255, f); fputc(px & 255, f);
+                }
+                fclose(f);
+            }
         }
     }
 
@@ -167,6 +203,7 @@ static const char* metal_shader_src =
             if (crop_bottom < 8) crop_bottom = 8;
         }
 
+        if (is24) { disp_x = 0; disp_y = 0; }
         simd_float4 uv_bounds = simd_make_float4(
             (float)disp_x / (float)PS1_VRAM_WIDTH,
             (float)(disp_y + crop_top) / (float)PS1_VRAM_HEIGHT,

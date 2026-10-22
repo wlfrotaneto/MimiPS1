@@ -47,6 +47,8 @@ PS1Context* ps1_runtime_create(void) {
     ctx->aspect_ratio = 0; // 4:3
     ctx->next_vblank_cycle = PS1_VBLANK_PERIOD;
     ctx->unthrottled = getenv("MIMIPS1_UNTHROTTLED") != NULL;
+    ctx->cpi = getenv("MIMIPS1_CPI") ? (uint32_t)atoi(getenv("MIMIPS1_CPI")) : 1;
+    if (ctx->cpi < 1) ctx->cpi = 1;
     return ctx;
 }
 

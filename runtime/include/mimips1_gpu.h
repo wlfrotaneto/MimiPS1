@@ -84,6 +84,7 @@ struct PS1GPU {
 
     // Double buffering snapshot & display crop
     uint16_t front_vram[PS1_VRAM_HEIGHT][PS1_VRAM_WIDTH];
+    bool     front_is_24bit;    // colour depth of the presented frame
     int16_t  front_disp_x, front_disp_y, front_disp_w, front_disp_h;
     int16_t  front_crop_top, front_crop_bottom;
 

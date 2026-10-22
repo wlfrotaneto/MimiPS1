@@ -721,6 +721,7 @@ void ps1_gpu_write_gp1(PS1GPU* gpu, uint32_t val) {
             gpu->disp_x = (int16_t)(val & 0x3FE); // 2-pixel aligned in hardware
             gpu->disp_y = (int16_t)((val >> 10) & 0x1FF);
             memcpy(gpu->front_vram, gpu->vram, sizeof(gpu->vram));
+            gpu->front_is_24bit = gpu->is_24bit;
             gpu->front_disp_x = gpu->disp_x;
             gpu->front_disp_y = gpu->disp_y;
             gpu->front_disp_w = gpu->disp_w;
@@ -782,7 +783,8 @@ void ps1_gpu_write_gp1(PS1GPU* gpu, uint32_t val) {
 
 void ps1_gpu_vblank(PS1GPU* gpu) {
     memcpy(gpu->front_vram, gpu->vram, sizeof(gpu->vram));
-    gpu->front_disp_x = gpu->disp_x;
+    gpu->front_is_24bit = gpu->is_24bit;
+            gpu->front_disp_x = gpu->disp_x;
     gpu->front_disp_y = gpu->disp_y;
     gpu->front_disp_w = gpu->disp_w;
     gpu->front_disp_h = gpu->disp_h;
