@@ -85,6 +85,8 @@ struct PS1CDROM {
     uint32_t xa_rate;               // source rate of the queued frames
     uint32_t xa_frac;               // 16.16 position between two source frames
     int16_t  xa_old[2], xa_older[2];
+    int16_t  xa_last[2];            // last frame handed out (held and faded while the stream is starved)
+    float    xa_gain;               // 0..1 ramp that hides starts and gaps
 };
 
 void     ps1_cdrom_init(PS1CDROM* cdrom);

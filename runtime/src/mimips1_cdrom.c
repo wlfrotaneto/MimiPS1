@@ -388,16 +388,24 @@ static void cd_decode_xa(PS1CDROM* cd, const uint8_t* raw) {
 int ps1_cdrom_read_xa_samples(PS1CDROM* cd, int16_t* out, int num_samples) {
     int produced = 0;
     uint32_t step = cd->xa_rate ? (uint32_t)(((uint64_t)cd->xa_rate << 16) / 44100) : 0;
-    while (produced < num_samples) {
-        if (cd->xa_write - cd->xa_read < 2) break;
-        uint32_t i0 = cd->xa_read & (XA_RING_FRAMES - 1), i1 = (cd->xa_read + 1) & (XA_RING_FRAMES - 1);
-        for (int c = 0; c < 2; c++) {
-            int32_t a = cd->xa_ring[i0 * 2 + c], b = cd->xa_ring[i1 * 2 + c];
-            out[produced * 2 + c] = (int16_t)(a + (((b - a) * (int32_t)cd->xa_frac) >> 16));
+    for (int n = 0; n < num_samples; n++) {
+        bool have = step && (cd->xa_write - cd->xa_read >= 2);
+        if (have) {
+            uint32_t i0 = cd->xa_read & (XA_RING_FRAMES - 1), i1 = (cd->xa_read + 1) & (XA_RING_FRAMES - 1);
+            for (int c = 0; c < 2; c++) {
+                int32_t a = cd->xa_ring[i0 * 2 + c], b = cd->xa_ring[i1 * 2 + c];
+                cd->xa_last[c] = (int16_t)(a + (((b - a) * (int32_t)cd->xa_frac) >> 16));
+            }
+            cd->xa_frac += step;
+            while (cd->xa_frac >= 0x10000) { cd->xa_frac -= 0x10000; cd->xa_read++; }
+            cd->xa_gain += 1.0f / 64.0f; if (cd->xa_gain > 1.0f) cd->xa_gain = 1.0f;
+        } else {
+            cd->xa_gain -= 1.0f / 64.0f; if (cd->xa_gain < 0.0f) cd->xa_gain = 0.0f;
+            if (cd->xa_gain == 0.0f) { cd->xa_last[0] = cd->xa_last[1] = 0; break; }
         }
+        out[n * 2] = (int16_t)(cd->xa_last[0] * cd->xa_gain);
+        out[n * 2 + 1] = (int16_t)(cd->xa_last[1] * cd->xa_gain);
         produced++;
-        cd->xa_frac += step;
-        while (cd->xa_frac >= 0x10000) { cd->xa_frac -= 0x10000; cd->xa_read++; }
     }
     return produced;
 }

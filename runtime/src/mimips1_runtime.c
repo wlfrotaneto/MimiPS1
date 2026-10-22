@@ -390,6 +390,7 @@ static void scheduler_run(PS1Context* ctx) {
             }
         }
         apply_scripted_input(ctx);
+        ps1_input_vblank(&ctx->input);
         ps1_bios_update_pads(ctx);
         ps1_trigger_irq(ctx, IRQ_VBLANK);
         ps1_gpu_vblank(&ctx->gpu);

@@ -20,12 +20,39 @@ void ps1_input_reset(PS1Input* input) {
     ps1_input_init(input);
 }
 
+#define MIN_PRESS_FRAMES 3
+
+static int btn_index(PS1Button btn) {
+    for (int i = 0; i < 16; i++) if ((uint16_t)btn == (1u << i)) return i;
+    return -1;
+}
+
 void ps1_input_set_button(PS1Input* input, int pad_idx, PS1Button btn, bool pressed) {
     if (pad_idx < 0 || pad_idx > 1) return;
+    int bi = btn_index(btn);
     if (pressed) {
+        if (bi >= 0 && (input->pads[pad_idx].buttons & (uint16_t)btn)) input->press_at[pad_idx][bi] = input->vblank_count; // newly down
+        if (bi >= 0) input->release_pending[pad_idx] &= ~(uint16_t)btn;
         input->pads[pad_idx].buttons &= ~(uint16_t)btn; // Active low
-    } else {
-        input->pads[pad_idx].buttons |= (uint16_t)btn;
+    } else if (!(input->pads[pad_idx].buttons & (uint16_t)btn)) {          // currently down
+        if (bi >= 0 && input->vblank_count - input->press_at[pad_idx][bi] < MIN_PRESS_FRAMES) {
+            input->release_pending[pad_idx] |= (uint16_t)btn;               // too short: release later
+        } else {
+            input->pads[pad_idx].buttons |= (uint16_t)btn;
+        }
+    }
+}
+
+void ps1_input_vblank(PS1Input* input) {
+    input->vblank_count++;
+    for (int p = 0; p < 2; p++) {
+        for (int i = 0; i < 16; i++) {
+            uint16_t bit = (uint16_t)(1u << i);
+            if ((input->release_pending[p] & bit) && input->vblank_count - input->press_at[p][i] >= MIN_PRESS_FRAMES) {
+                input->release_pending[p] &= ~bit;
+                input->pads[p].buttons |= bit;
+            }
+        }
     }
 }
 

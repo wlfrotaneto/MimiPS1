@@ -2,11 +2,11 @@
 #include <stdatomic.h>
 #include "mimips1_runtime.h"
 
-#define NUM_AUDIO_BUFFERS 3
-#define AUDIO_BUFFER_SIZE 512 // Reduced to 512 frames (~11.6ms) for lowest latency
+#define NUM_AUDIO_BUFFERS 4
+#define AUDIO_BUFFER_SIZE 1024 // frames per AudioQueue buffer (~23 ms); a few buffers ride out scheduling hiccups
 #define AUDIO_RING_CAPACITY 16384 // frames (stereo)
 #define AUDIO_RING_MASK (AUDIO_RING_CAPACITY - 1)
-#define AUDIO_MAX_LATENCY_FRAMES 4410 // ~6 video frames at 44.1kHz (~100ms headroom)
+#define AUDIO_MAX_LATENCY_FRAMES 8820 // ~200 ms before the consumer discards audio
 
 typedef struct {
     int16_t buffer[AUDIO_RING_CAPACITY * 2]; // 16384 stereo frames (L, R)
@@ -155,7 +155,7 @@ void macos_audio_tick(PS1Context* ctx, uint32_t delta_cycles) {
             frames_acc += chunk;
             if (frames_acc >= 44100) {
                 int voices = 0; for (int v = 0; v < 24; v++) voices += ctx->spu.voices[v].active;
-                printf("[Audio] peak=%d active_voices=%d xa_queued=%u spucnt=%04X\n", peak, voices, ctx->cdrom.xa_write - ctx->cdrom.xa_read, ctx->spu.ctrl);
+                printf("[Audio] peak=%d active_voices=%d xa_queued=%u spucnt=%04X underruns=%llu\n", peak, voices, ctx->cdrom.xa_write - ctx->cdrom.xa_read, ctx->spu.ctrl, (unsigned long long)atomic_load_explicit(&g_audio_state.ring.underrun_count, memory_order_relaxed));
                 fflush(stdout); peak = 0; frames_acc = 0;
             }
         }

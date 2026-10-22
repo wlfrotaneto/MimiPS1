@@ -40,6 +40,12 @@ struct PS1Input {
     uint32_t xfer_cycles;
     uint32_t ack_cycles;        // /ACK stays low (DSR set) only briefly after a byte
 
+    // A press shorter than the game's polling interval would be lost: releases are deferred until
+    // the button has been down for a few video frames
+    uint32_t vblank_count;
+    uint32_t press_at[2][16];
+    uint16_t release_pending[2];
+
     // Memory card transaction (81h ... on the selected port)
     void*    cards;             // PS1CardManager*, set by the runtime
     int      card_slot;
@@ -60,6 +66,7 @@ struct PS1Input {
 
 void     ps1_input_init(PS1Input* input);
 void     ps1_input_reset(PS1Input* input);
+void     ps1_input_vblank(PS1Input* input);   // once per video frame: applies deferred releases
 void     ps1_input_set_button(PS1Input* input, int pad_idx, PS1Button btn, bool pressed);
 void     ps1_input_set_stick(PS1Input* input, int pad_idx, bool right_stick, uint8_t x, uint8_t y);
 void     ps1_input_set_analog(PS1Input* input, int pad_idx, bool enabled);
