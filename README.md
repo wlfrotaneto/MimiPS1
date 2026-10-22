@@ -93,11 +93,15 @@ Following the modern wave of static recompilation architectures (such as *N64Rec
   * Exact `GetlocL` (0x10) and `GetlocP` (0x11) position tracking via `last_read_lba`.
   * Multi-channel DMA transfers (GPU Linked-List Mode with bit 23 boundary check, immediate block mode vs slice mode word count differentiation).
 
-* **Official BIOS & HLE Dual Support (`runtime/src/mimips1_bios.c` & `runtime/src/mimips1_cpu.c`):**
-  * Automatic detection and execution of official PlayStation BIOS (`assets/bios.bin`).
-  * Low RAM kernel setup with standard Psy-Q B0 (`0x80000800`) and C0 (`0x80000C00`) jump tables.
-  * Built-in HLE implementations for Sony syscalls (`A0`, `B0`, `C0`), including standard memory allocators (`malloc`, `free`, `realloc`), math (`rand`, `srand`), strings (`memchr`), and filesystem (`firstfile`).
-  * Direct vector trapping for unmapped PC overlay code jumps into BIOS vectors.
+* **MIPS Interpreter + Real BIOS Boot (`runtime/src/mimips1_interp.c`):**
+  * Reference R3000A engine: branch and load delay slots (with LWL/LWR forwarding), COP0 exceptions (EPC/BD/SR stack), hardware interrupts, overflow/address-error traps, cache isolation.
+  * With an official BIOS (`assets/bios.bin`) and a disc, the emulator boots at the reset vector and the **real BIOS loads the game from the disc**. The HLE kernel remains as a fallback (`MIMIPS1_HLE=1` or no BIOS).
+  * Recompiled functions are entered natively from the interpreter on taken jumps/calls, but only after the boot executable's RAM image matches the original. Stores/DMA that change recompiled instructions invalidate just that function. Native code is never entered during a kernel exception.
+  * Code that was never recompiled (overlays, generated code) simply runs in the interpreter.
+
+* **Event-driven timing (`runtime/src/mimips1_runtime.c`):** deterministic cycle counter; hardware only latches `I_STAT`, handlers run at safe points honouring `I_MASK` and `SR`. Wall-clock time is used only for 60 Hz frame pacing.
+
+* **MDEC (`runtime/src/mimips1_mdec.c`):** full macroblock decoder (run-length, dequantisation, IDCT, YCbCr→RGB, 15/24-bit) with request-driven DMA0/DMA1.
 
 * **Memory Card Manager (`runtime/src/mimips1_card.c`):**
   * Dual 128KB memory card persistence in `~/Library/Application Support/MimiPS1/memcards/`.
@@ -210,8 +214,14 @@ open "build/Crash Bandicoot.app"
 
 ## Current Project Status
 
-| Title / Target | Serial | Recompilation | Video / GPU | Audio / SPU | Status |
-| :--- | :--- | :---: | :---: | :---: | :--- |
+| Title / Target | Serial | Boot | Status |
+| :--- | :--- | :---: | :--- |
+| **Triangle Demo (Homebrew)** | N/A | HLE | **Playable** |
+| **Crash Bandicoot** | `SCUS-94900` | Real BIOS | **Boots through logos, title screen (jungle backdrop included) and attract-mode gameplay.** No audio yet |
+| **Cotton Original** | `SLPM-86461` | Real BIOS | **Reaches the title screen** with full art. No audio yet |
+| **Castlevania: Symphony of the Night** | `SLUS-00067` | Real BIOS | Boots into the Konami-logo FMV and stays there: the game's custom CD stream ISR never reports the end of the movie (open issue). No audio yet |
+
+--- | :--- | :---: | :---: | :---: | :--- |
 | **Triangle Demo (Homebrew)** | N/A | ✅ Clean | ✅ Metal 60 FPS | N/A | **Fully Playable** |
 | **Crash Bandicoot** | `SCUS-94900` | ✅ Clean (820 funcs) | 🟡 Intro & 3D Title Scene | ✅ Audio Streaming | **Boots through Intro & Title Screen** (Naughty Dog banner, 3D doghouse, zero visual artifacts, audio streaming) |
 | **Cotton Original** | `SLPM-86461` | ✅ Clean (2133 funcs) | 🟡 Kernel & IRQ inited | 🟡 In progress | **Recompiled & Packaged** (Kernel & IRQ inited, native memory card icon extracted from disc) |
@@ -259,11 +269,27 @@ open "build/Crash Bandicoot.app"
 - [x] macOS `.app` bundle builder & compressed UDZO `.dmg` packaging
 
 ### Active Research & Debugging
-- [ ] VRAM-to-VRAM background DMA copy synchronization for Crash title jungle backdrop
-- [ ] Castlevania dynamic overlay function call dispatch (`F_TITLE0.BIN` unmapped indirect call target)
-- [ ] Investigate frame display synchronization on Cotton Original
-- [ ] ADPCM voice ADSR envelope curves & hardware reverberation buffers
+- [ ] Castlevania: end-of-movie detection in the custom CD streaming ISR (`0x8001C8xx`), ring index `0x80097960` never wraps
+- [ ] SPU: ADSR envelopes, reverb, IRQ; XA-ADPCM decoding (currently XA sectors are only filtered)
+- [ ] Memory card over SIO0 (`0x81` device); BIOS currently sees no card
+- [ ] Metal presenter: 24-bit display mode (GP1 `08` bit 4)
+- [ ] Software rasterizer speed / mask bit / dithering / texture-window accuracy
 - [ ] Analog joystick mapping and rumble haptics via GameController framework
+
+### Debugging Aids
+| Variable | Effect |
+| :--- | :--- |
+| `MIMIPS1_LOG=1..3` | Log level (exceptions, CD/DMA/SIO traces) |
+| `MIMIPS1_UNTHROTTLED=1` | Skip real-time frame pacing |
+| `MIMIPS1_HLE=1` | Force the built-in HLE kernel instead of the real BIOS |
+| `MIMIPS1_CD_SPEEDUP=N` | Shorten CD seek/transfer times |
+| `MIMIPS1_INPUT="start@300+8"` | Scripted pad input (button@frame+duration) |
+| `MIMIPS1_DUMP_FRAMES / _EVERY / _FROM` | Dump VRAM to `/tmp/vram_frame_N.ppm` (`tools/vram2png.py` crops/converts) |
+| `MIMIPS1_RAMDUMP=frame` | Dump RAM to `/tmp/ps1_ram.bin` (`tools/psdis.py` disassembles it) |
+| `MIMIPS1_WATCH=addr`, `MIMIPS1_PCTRACE=1` | RAM word watchpoint; PC ring buffer on unexpected exceptions |
+| `MIMIPS1_MDEC_LOG`, `MIMIPS1_MDEC_DUMP=N` | MDEC command log / decoded frame dumps |
+
+`tools/cfg_coverage.py` reports uncovered text for a recompiled EXE; `tools/fast_rebuild.sh` rebuilds a game bundle's runtime only.
 
 ---
 

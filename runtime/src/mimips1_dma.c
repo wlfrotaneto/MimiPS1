@@ -82,7 +82,7 @@ void ps1_dma_execute(PS1Context* ctx, int channel_idx) {
     ctx->dma.last_madr = ch->madr;
     ctx->dma.last_bcr = ch->bcr;
     uint32_t words_moved = 0;
-    PS1_LOG(2, "[DMA] execute ch=%d sync=%u madr=0x%08X bcr=0x%08X chcr=0x%08X\n", channel_idx, sync_mode, ch->madr, ch->bcr, ch->chcr);
+    PS1_LOG(2, "[DMA] execute ch=%d sync=%u madr=0x%08X bcr=0x%08X chcr=0x%08X (pc=%08X ra=%08X)\n", channel_idx, sync_mode, ch->madr, ch->bcr, ch->chcr, ctx->cpu.pc, ctx->cpu.r[31]);
 
     // GPU DMA Channel (2)
     if (channel_idx == DMA_GPU) {
