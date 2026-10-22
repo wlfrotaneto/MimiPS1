@@ -110,6 +110,20 @@ void macos_audio_tick(PS1Context* ctx, uint32_t delta_cycles) {
         int16_t mix_buf[256 * 2];
         ps1_spu_generate_samples(&ctx->spu, mix_buf, chunk);
 
+        // XA-ADPCM streams (movies, music) decoded by the CD controller
+        if (!ctx->cdrom.muted && (ctx->spu.ctrl & 1)) {
+            int16_t xa_buf[256 * 2];
+            int got = ps1_cdrom_read_xa_samples(&ctx->cdrom, xa_buf, chunk);
+            int vl = ctx->spu.cd_vol_left ? ctx->spu.cd_vol_left : 0x7FFF;
+            int vr = ctx->spu.cd_vol_right ? ctx->spu.cd_vol_right : 0x7FFF;
+            for (int i = 0; i < got; i++) {
+                int32_t l = mix_buf[i * 2] + ((xa_buf[i * 2] * vl) >> 15);
+                int32_t r = mix_buf[i * 2 + 1] + ((xa_buf[i * 2 + 1] * vr) >> 15);
+                mix_buf[i * 2] = (int16_t)(l > 32767 ? 32767 : l < -32768 ? -32768 : l);
+                mix_buf[i * 2 + 1] = (int16_t)(r > 32767 ? 32767 : r < -32768 ? -32768 : r);
+            }
+        }
+
         // Mix CD-DA digital audio track if CD-ROM is playing
         if (ctx->cdrom.playing && ctx->cdrom.image_file) {
             int16_t cdda_buf[256 * 2];
@@ -134,6 +148,17 @@ void macos_audio_tick(PS1Context* ctx, uint32_t delta_cycles) {
             }
         }
 
+        static int stats = -1; static int peak, spu_peak, frames_acc;
+        if (stats < 0) stats = getenv("MIMIPS1_AUDIO_STATS") != NULL;
+        if (stats) {
+            for (int i = 0; i < chunk * 2; i++) { int a = abs(mix_buf[i]); if (a > peak) peak = a; }
+            frames_acc += chunk;
+            if (frames_acc >= 44100) {
+                int voices = 0; for (int v = 0; v < 24; v++) voices += ctx->spu.voices[v].active;
+                printf("[Audio] peak=%d active_voices=%d xa_queued=%u spucnt=%04X\n", peak, voices, ctx->cdrom.xa_write - ctx->cdrom.xa_read, ctx->spu.ctrl);
+                fflush(stdout); peak = 0; frames_acc = 0;
+            }
+        }
         audio_ring_push(&g_audio_state.ring, mix_buf, chunk);
     }
 }

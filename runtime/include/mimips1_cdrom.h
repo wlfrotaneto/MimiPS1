@@ -8,6 +8,7 @@
 extern "C" {
 #endif
 
+#define XA_RING_FRAMES 16384            // power of two
 #define CDROM_SECTOR_SIZE_RAW  2352
 #define CDROM_SECTOR_SIZE_DATA 2048
 
@@ -77,12 +78,20 @@ struct PS1CDROM {
     uint8_t  sector_buf[CDROM_SECTOR_SIZE_RAW]; // Latest sector, copied to data_fifo on BFRD
     int      sector_len;
     uint8_t  filter_file, filter_channel;
+
+    // XA-ADPCM output: decoded stereo frames at 37800 / 18900 Hz waiting to be resampled to 44100
+    int16_t  xa_ring[XA_RING_FRAMES * 2];
+    uint32_t xa_write, xa_read;     // free-running frame counters
+    uint32_t xa_rate;               // source rate of the queued frames
+    uint32_t xa_frac;               // 16.16 position between two source frames
+    int16_t  xa_old[2], xa_older[2];
 };
 
 void     ps1_cdrom_init(PS1CDROM* cdrom);
 void     ps1_cdrom_reset(PS1CDROM* cdrom);
 bool     ps1_cdrom_open_image(PS1CDROM* cdrom, const char* path);
 void     ps1_cdrom_close_image(PS1CDROM* cdrom);
+int      ps1_cdrom_read_xa_samples(PS1CDROM* cdrom, int16_t* buffer_stereo, int num_samples);
 int      ps1_cdrom_read_cdda_samples(PS1CDROM* cdrom, int16_t* buffer_stereo, int num_samples);
 
 // ISO9660 filesystem functions

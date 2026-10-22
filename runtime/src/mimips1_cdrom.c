@@ -338,6 +338,70 @@ static void handle_cdrom_command(PS1Context* ctx, uint8_t cmd) {
     cd->param_count = 0;
 }
 
+// ---------------------------------------------------------------------------------------------
+// XA-ADPCM: 18 sound groups of 8 blocks x 28 samples per sector (4-bit), mono or stereo
+
+static const int xa_pos[4] = { 0, 60, 115, 98 };
+static const int xa_neg[4] = { 0, 0, -52, -55 };
+
+static void xa_push(PS1CDROM* cd, int16_t l, int16_t r) {
+    if (cd->xa_write - cd->xa_read >= XA_RING_FRAMES) cd->xa_read++;   // overrun: drop the oldest
+    uint32_t i = cd->xa_write++ & (XA_RING_FRAMES - 1);
+    cd->xa_ring[i * 2] = l;
+    cd->xa_ring[i * 2 + 1] = r;
+}
+
+static void cd_decode_xa(PS1CDROM* cd, const uint8_t* raw) {
+    uint8_t coding = raw[19];
+    bool stereo = (coding & 1) != 0;
+    uint32_t rate = (coding & 4) ? 18900 : 37800;
+    if (rate != cd->xa_rate) { cd->xa_rate = rate; cd->xa_frac = 0; }
+    for (int g = 0; g < 18; g++) {
+        const uint8_t* grp = raw + 24 + g * 128;
+        int16_t out[8][28];
+        for (int b = 0; b < 8; b++) {
+            uint8_t hdr = grp[4 + b];
+            int shift = hdr & 0x0F; if (shift > 12) shift = 9;
+            int filt = (hdr >> 4) & 3;
+            int ch = stereo ? (b & 1) : 0;
+            for (int i = 0; i < 28; i++) {
+                int nib = (grp[16 + i * 4 + (b >> 1)] >> (4 * (b & 1))) & 0xF;
+                int s = (int16_t)(nib << 12) >> shift;
+                s += (cd->xa_old[ch] * xa_pos[filt] + cd->xa_older[ch] * xa_neg[filt] + 32) >> 6;
+                if (s > 32767) s = 32767; else if (s < -32768) s = -32768;
+                cd->xa_older[ch] = cd->xa_old[ch];
+                cd->xa_old[ch] = (int16_t)s;
+                out[b][i] = (int16_t)s;
+            }
+        }
+        if (stereo) {
+            for (int pair = 0; pair < 4; pair++)
+                for (int i = 0; i < 28; i++) xa_push(cd, out[pair * 2][i], out[pair * 2 + 1][i]);
+        } else {
+            for (int b = 0; b < 8; b++)
+                for (int i = 0; i < 28; i++) xa_push(cd, out[b][i], out[b][i]);
+        }
+    }
+}
+
+// Produces `num_samples` frames at 44100 Hz; returns how many were available (rest is silence)
+int ps1_cdrom_read_xa_samples(PS1CDROM* cd, int16_t* out, int num_samples) {
+    int produced = 0;
+    uint32_t step = cd->xa_rate ? (uint32_t)(((uint64_t)cd->xa_rate << 16) / 44100) : 0;
+    while (produced < num_samples) {
+        if (cd->xa_write - cd->xa_read < 2) break;
+        uint32_t i0 = cd->xa_read & (XA_RING_FRAMES - 1), i1 = (cd->xa_read + 1) & (XA_RING_FRAMES - 1);
+        for (int c = 0; c < 2; c++) {
+            int32_t a = cd->xa_ring[i0 * 2 + c], b = cd->xa_ring[i1 * 2 + c];
+            out[produced * 2 + c] = (int16_t)(a + (((b - a) * (int32_t)cd->xa_frac) >> 16));
+        }
+        produced++;
+        cd->xa_frac += step;
+        while (cd->xa_frac >= 0x10000) { cd->xa_frac -= 0x10000; cd->xa_read++; }
+    }
+    return produced;
+}
+
 // Reads the next sector from the image into the controller's sector buffer.
 // Returns false if the sector must be dropped (XA audio, read error).
 static bool cd_fetch_sector(PS1CDROM* cd) {
@@ -348,9 +412,13 @@ static bool cd_fetch_sector(PS1CDROM* cd) {
 
     if (cd->is_raw && (cd->mode & 0x40)) {
         // XA-ADPCM enabled: audio sectors (submode bit 2) go to the decoder, not the host
-        uint8_t sub[8];
-        fseek(cd->image_file, (long)cd->current_lba * cd->sector_size + 16, SEEK_SET);
-        if (fread(sub, 1, 8, cd->image_file) == 8 && (sub[2] & 0x04)) return false;
+        uint8_t raw[CDROM_SECTOR_SIZE_RAW];
+        fseek(cd->image_file, (long)cd->current_lba * cd->sector_size, SEEK_SET);
+        if (fread(raw, 1, sizeof(raw), cd->image_file) == sizeof(raw) && (raw[18] & 0x04)) {
+            bool match = !(cd->mode & 0x08) || (raw[16] == cd->filter_file && raw[17] == cd->filter_channel);
+            if (match) cd_decode_xa(cd, raw);
+            return false;
+        }
     }
 
     fseek(cd->image_file, (long)cd->current_lba * cd->sector_size + off, SEEK_SET);

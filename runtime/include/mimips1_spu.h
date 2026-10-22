@@ -18,50 +18,55 @@ typedef enum {
 } SPUAdsrPhase;
 
 typedef struct {
-    int16_t  vol_left;
-    int16_t  vol_right;
+    uint16_t vol_left_reg;      // raw volume registers (bit15 = sweep mode)
+    uint16_t vol_right_reg;
     uint16_t sample_rate;       // Pitch (0x1000 = 44100Hz)
     uint32_t start_addr;        // Address in SPU RAM
-    uint32_t current_addr;
+    uint32_t current_addr;      // Start of the ADPCM block being played
     uint32_t loop_addr;
-    
+
     // ADSR configuration
     uint16_t adsr_low;
     uint16_t adsr_high;
     SPUAdsrPhase adsr_phase;
-    int32_t  adsr_level;
+    int32_t  adsr_level;        // 0..0x7FFF
+    uint32_t adsr_counter;
 
-    // ADPCM decode state
+    // ADPCM decode state: one block (28 samples) at a time plus interpolation history
     int16_t  prev1;
     int16_t  prev2;
-    uint32_t sample_counter;    // Fixed-point counter for pitch resampling
-    uint8_t  sample_in_block;   // 0..27 samples within 16-byte block
-    int16_t  current_decoded_sample;
+    int16_t  block[28];
+    int16_t  hist[4];           // last decoded samples, oldest first
+    uint32_t pitch_counter;     // 12-bit fractional position between hist[2] and hist[3]
+    uint8_t  block_pos;         // next sample of `block` to push into hist
+    bool     block_valid;
+    int16_t  last_out;          // for pitch modulation of the next voice
 
-    bool     key_on;
-    bool     key_off;
-    bool     looping;
     bool     active;
 } SPUVoice;
 
 struct PS1SPU {
     uint8_t  ram[PS1_SPU_RAM_SIZE]; // 512KB Sound RAM
     SPUVoice voices[SPU_NUM_VOICES];
-    
-    int16_t  master_vol_left;
-    int16_t  master_vol_right;
+
+    uint16_t main_vol_left;
+    uint16_t main_vol_right;
     int16_t  cd_vol_left;
     int16_t  cd_vol_right;
 
-    uint32_t key_on_bits;
-    uint32_t key_off_bits;
-    uint32_t voice_status;
+    uint32_t pmon_bits;         // pitch modulation
+    uint32_t noise_bits;
+    uint32_t reverb_bits;
+    uint32_t endx_bits;
+    uint32_t noise_level;
+    uint32_t noise_counter;
 
     uint16_t ctrl;
     uint16_t stat;
     uint32_t transfer_addr;
     uint16_t irq_addr;
-    
+    uint16_t regs[0x200];       // raw mirror of the register file (reverb setup, unmodelled registers)
+
     // CoreAudio / Output audio ring buffer
     int16_t  out_buffer[4096 * 2]; // Stereo samples
     int      out_write_pos;
