@@ -43,6 +43,7 @@ PS1Context* ps1_runtime_create(void) {
     ps1_card_auto_setup(&ctx->card_mgr);
 
     ctx->running = true;
+    ctx->native_enabled = true;   // HLE mode runs recompiled code from the start; BIOS boot validates first
     ctx->aspect_ratio = 0; // 4:3
     ctx->next_vblank_cycle = PS1_VBLANK_PERIOD;
     ctx->unthrottled = getenv("MIMIPS1_UNTHROTTLED") != NULL;
@@ -125,6 +126,14 @@ bool ps1_runtime_load_exe(PS1Context* ctx, const char* exe_path) {
 
     ctx->exe_text_addr = text_addr;
     ctx->exe_text_size = text_size;
+    ctx->exe_entry = init_pc;
+
+    // Keep a pristine copy of the text image: recompiled code is only valid while RAM matches it
+    free(ctx->exe_shadow);
+    ctx->exe_shadow = (uint8_t*)malloc(text_size);
+    if (ctx->exe_shadow && (paddr + text_size <= PS1_RAM_SIZE)) {
+        memcpy(ctx->exe_shadow, &ctx->memory.ram[paddr], text_size);
+    }
 
     printf("[MimiPS1] Loaded EXE: %s\n", exe_path);
     printf("         Entry PC: 0x%08X, Text: 0x%08X (size: %u bytes)\n", init_pc, text_addr, text_size);
@@ -480,4 +489,54 @@ void ps1_runtime_run(PS1Context* ctx) {
     } else if (ctx->cpu.pc != 0) {
         ps1_call_indirect(ctx, ctx->cpu.pc);
     }
+}
+
+// Returns the pristine word for a RAM physical address, or false if outside the executable image.
+static bool shadow_word(const PS1Context* ctx, uint32_t paddr, uint32_t* out) {
+    if (!ctx->exe_shadow) return false;
+    uint32_t base = ctx->exe_text_addr & 0x1FFFFFFF;
+    if (paddr < base || paddr + 4 > base + ctx->exe_text_size) return false;
+    memcpy(out, ctx->exe_shadow + (paddr - base), 4);
+    return true;
+}
+
+// Drops the recompiled function that owns word `w`, so it is interpreted from now on.
+static void native_invalidate_function(PS1Context* ctx, uint32_t w) {
+    uint32_t e = w, steps = 0;
+    while (e > 0 && !(ctx->cpu.entry_bits[e >> 3] & (1u << (e & 7))) && steps++ < 8192) e--;
+    uint32_t n = w + 1;
+    steps = 0;
+    while (n < PS1_FUNC_TABLE_SIZE && !(ctx->cpu.entry_bits[n >> 3] & (1u << (n & 7))) && steps++ < 8192) n++;
+    for (uint32_t off = e; off < n; off++) {
+        ctx->cpu.func_table[off] = NULL;
+        ctx->cpu.entry_bits[off >> 3] &= (uint8_t)~(1u << (off & 7));
+        ctx->cpu.code_bits[off >> 3] &= (uint8_t)~(1u << (off & 7));
+    }
+    static int logged = 0;
+    if (logged++ < 20) {
+        printf("[MimiPS1] Code at 0x%08X changed: function 0x%08X..0x%08X now interpreted\n",
+               0x80000000u | (w << 2), 0x80000000u | (e << 2), 0x80000000u | (n << 2));
+    }
+}
+
+// Invalidates every recompiled function with a word in [addr, addr+bytes) that no longer matches
+// the original instruction. Only words flagged as code are compared.
+void ps1_native_check_range(PS1Context* ctx, uint32_t addr, uint32_t bytes) {
+    if (!ctx->native_enabled || bytes == 0) return;
+    uint32_t first = (addr & 0x001FFFFC) >> 2;
+    uint32_t last = ((addr + bytes - 1) & 0x001FFFFC) >> 2;
+    for (uint32_t w = first; w <= last && w < PS1_FUNC_TABLE_SIZE; w++) {
+        if (!(ctx->cpu.code_bits[w >> 3] & (1u << (w & 7)))) continue;
+        uint32_t orig, cur = *(uint32_t*)&ctx->memory.ram[w << 2];
+        if (!shadow_word(ctx, w << 2, &orig) || orig != cur) native_invalidate_function(ctx, w);
+    }
+}
+
+// Called when the boot executable is about to run: trust the recompiled functions only if the
+// whole code image in RAM is identical to the one they were built from.
+void ps1_native_try_enable(PS1Context* ctx) {
+    if (ctx->native_enabled || !ctx->exe_shadow) return;
+    ctx->native_enabled = true;
+    ps1_native_check_range(ctx, ctx->exe_text_addr & 0x1FFFFFFF, ctx->exe_text_size);
+    printf("[MimiPS1] Boot executable verified: running recompiled code natively\n");
 }

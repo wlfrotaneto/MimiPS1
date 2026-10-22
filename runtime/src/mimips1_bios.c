@@ -250,6 +250,7 @@ static int bios_file_read(PS1Context* ctx, int fd, void* dst, int length) {
     if (!ps1_cdrom_read_bytes(&ctx->cdrom, f->start_lba, f->cur_offset, dst, to_read)) {
         return -1;
     }
+    ps1_native_check_range(ctx, (uint32_t)((uint8_t*)dst - ctx->memory.ram), to_read);
     f->cur_offset += to_read;
     return (int)to_read;
 }

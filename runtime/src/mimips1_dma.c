@@ -66,11 +66,13 @@ void ps1_dma_write(PS1Context* ctx, uint32_t addr, uint32_t val) {
 }
 
 static void mdec_out_pump(PS1Context* ctx, DMAChannel* ch) {
+    uint32_t start = ch->pending_addr;
     while (ch->pending_words && ch->pending_addr < PS1_RAM_SIZE && ctx->mdec.out_pos < ctx->mdec.out_len) {
         *(uint32_t*)&ctx->memory.ram[ch->pending_addr] = ps1_mdec_read_data(&ctx->mdec);
         ch->pending_addr += 4;
         ch->pending_words--;
     }
+    if (ch->pending_addr > start) ps1_native_check_range(ctx, start, ch->pending_addr - start);
 }
 
 void ps1_dma_execute(PS1Context* ctx, int channel_idx) {
@@ -210,6 +212,13 @@ void ps1_dma_execute(PS1Context* ctx, int channel_idx) {
             }
         }
         PS1_LOG(2, "[MDEC] DMA%d words=%u out_len=%u out_pos=%u\n", channel_idx, words, ctx->mdec.out_len, ctx->mdec.out_pos);
+    }
+
+    // Transfers that wrote RAM must not leave stale recompiled code behind
+    if (channel_idx == DMA_CDROM || channel_idx == DMA_GPU || channel_idx == DMA_OTC) {
+        uint32_t span = (words_moved ? words_moved : 1) * 4;
+        if (channel_idx == DMA_CDROM) span = (words_moved / 6) * 4;
+        ps1_native_check_range(ctx, ch->madr & 0x1FFFFC, span ? span : 4);
     }
 
     // The data has moved, but completion (busy flag, DICR flag, IRQ3) is reported after the

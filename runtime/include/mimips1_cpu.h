@@ -52,6 +52,7 @@ struct PS1CPU {
     bool hook_next;         // Last branch may land on a recompiled entry
     bool hook_pending;      // pc just landed via such a branch
     uint8_t entry_bits[PS1_RAM_SIZE / 4 / 8]; // 1 = word is the entry of a recompiled function
+    uint8_t code_bits[PS1_RAM_SIZE / 4 / 8];  // 1 = word was recompiled (guards against overwritten code)
     
     // Fast O(1) Indirect Call Lookup Table
     PS1RecompiledFunc func_table[PS1_FUNC_TABLE_SIZE];

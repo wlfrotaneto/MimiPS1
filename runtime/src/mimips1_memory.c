@@ -72,10 +72,19 @@ uint32_t ps1_mem_read32(PS1Context* ctx, uint32_t addr) {
     return 0xFFFFFFFF;
 }
 
+// Stores into recompiled instructions invalidate native execution if they change the code
+static inline void after_ram_write(PS1Context* ctx, uint32_t paddr, uint32_t bytes) {
+    if (ctx->native_enabled) {
+        uint32_t w = (paddr & PS1_RAM_MIRROR_MASK) >> 2;
+        if (ctx->cpu.code_bits[w >> 3] & (1u << (w & 7))) ps1_native_check_range(ctx, paddr, bytes);
+    }
+}
+
 void ps1_mem_write8(PS1Context* ctx, uint32_t addr, uint8_t val) {
     uint32_t paddr = addr & 0x1FFFFFFF;
     if (paddr < 0x00800000) {
         ctx->memory.ram[paddr & PS1_RAM_MIRROR_MASK] = val;
+        after_ram_write(ctx, paddr, 1);
     } else if (paddr >= 0x1F800000 && paddr < 0x1F800400) {
         ctx->memory.scratchpad[paddr - 0x1F800000] = val;
     } else if (paddr >= 0x1F801000 && paddr < 0x1F803000) {
@@ -87,6 +96,7 @@ void ps1_mem_write16(PS1Context* ctx, uint32_t addr, uint16_t val) {
     uint32_t paddr = addr & 0x1FFFFFFF;
     if (paddr < 0x00800000) {
         *(uint16_t*)&ctx->memory.ram[(paddr & PS1_RAM_MIRROR_MASK) & ~1] = val;
+        after_ram_write(ctx, paddr, 2);
     } else if (paddr >= 0x1F800000 && paddr < 0x1F800400) {
         *(uint16_t*)&ctx->memory.scratchpad[paddr - 0x1F800000] = val;
     } else if (paddr >= 0x1F801000 && paddr < 0x1F803000) {
@@ -98,6 +108,7 @@ void ps1_mem_write32(PS1Context* ctx, uint32_t addr, uint32_t val) {
     uint32_t paddr = addr & 0x1FFFFFFF;
     if (__builtin_expect(paddr < 0x00800000, 1)) {
         *(uint32_t*)&ctx->memory.ram[(paddr & PS1_RAM_MIRROR_MASK) & ~3] = val;
+        after_ram_write(ctx, paddr, 4);
     } else if (paddr >= 0x1F800000 && paddr < 0x1F800400) {
         *(uint32_t*)&ctx->memory.scratchpad[paddr - 0x1F800000] = val;
     } else if (paddr >= 0x1F801000 && paddr < 0x1F803000) {

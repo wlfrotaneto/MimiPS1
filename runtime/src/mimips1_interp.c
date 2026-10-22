@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <setjmp.h>
 
 // Fake return addresses used to detect the end of a nested interpreter run
 #define MARKER_INTERRUPT 0xBFC7FF00u // kernel resumes here after servicing an interrupt
@@ -28,6 +29,17 @@
 #define EXC_RI    10
 #define EXC_CPU   11
 #define EXC_OV    12
+
+// Exceptions raised from native code are delivered to the kernel, which finishes by jumping to the
+// EPC it was given (a marker). That jump may happen deep inside nested native/interpreter frames
+// (ReturnFromException restores a thread context and never returns to its caller), so every
+// kernel entry registers a recovery point and the C stack is unwound to it.
+typedef struct KernelEntry {
+    uint32_t stop_pc;
+    jmp_buf buf;
+    struct KernelEntry* prev;
+} KernelEntry;
+static KernelEntry* s_kentry;
 
 static inline bool interp_hle_vector(uint32_t pc) {
     uint32_t p = pc & 0x1FFFFFFF;
@@ -102,6 +114,13 @@ static void interp_loop(PS1Context* ctx, uint32_t stop_pc, bool check_sp, uint32
         if (pc == stop_pc && (!check_sp || r[29] == stop_sp)) return;
         if (__builtin_expect(!ctx->running, 0)) return;
 
+        if (__builtin_expect((pc & 0xFFFFFFE0u) == (MARKER_INTERRUPT & 0xFFFFFFE0u), 0)) {
+            // The kernel resumed a context that was interrupted in native code: unwind to its owner
+            for (KernelEntry* e = s_kentry; e; e = e->prev) {
+                if (e->stop_pc == pc) longjmp(e->buf, 1);
+            }
+        }
+
         if (__builtin_expect(++tick_count >= 16, 0)) {
             tick_count = 0;
             ps1_cpu_tick(ctx, 16);
@@ -111,6 +130,11 @@ static void interp_loop(PS1Context* ctx, uint32_t stop_pc, bool check_sp, uint32
             // The interrupted instruction re-executes after the handler returns
             raise_exception(ctx, EXC_INT, pc, c->is_in_delay_slot, 0);
             continue;
+        }
+
+        if (__builtin_expect(ctx->bios_boot && pc == ctx->exe_entry && !ctx->native_enabled && ctx->exe_shadow && !ctx->native_tried, 0)) {
+            ctx->native_tried = true;
+            ps1_native_try_enable(ctx);
         }
 
         if (__builtin_expect(c->hook_pending, 0)) {
@@ -386,20 +410,31 @@ static void interp_kernel_entry(PS1Context* ctx, uint32_t code, uint32_t marker,
     bool saved_ds = c->is_in_delay_slot;
     uint32_t saved_lreg = c->ld_reg, saved_lval = c->ld_val;
     bool saved_native = ctx->in_native;
+    int saved_depth = ctx->interp_depth;
+    bool saved_hook_next = c->hook_next, saved_hook_pending = c->hook_pending;
 
-    raise_exception(ctx, code, marker, false, 0);
-    ctx->in_native = false;
+    KernelEntry entry;
+    entry.stop_pc = stop_pc;
+    entry.prev = s_kentry;
+    s_kentry = &entry;
 
-    ctx->interp_depth++;
-    interp_loop(ctx, stop_pc, false, 0);
-    ctx->interp_depth--;
+    if (setjmp(entry.buf) == 0) {
+        raise_exception(ctx, code, marker, false, 0);
+        ctx->in_native = false;
+        ctx->interp_depth++;
+        interp_loop(ctx, stop_pc, false, 0);
+    }
+    s_kentry = entry.prev;
 
+    ctx->interp_depth = saved_depth;
     ctx->in_native = saved_native;
     c->pc = saved_pc;
     c->next_pc = saved_npc;
     c->is_in_delay_slot = saved_ds;
     c->ld_reg = saved_lreg;
     c->ld_val = saved_lval;
+    c->hook_next = saved_hook_next;
+    c->hook_pending = saved_hook_pending;
 }
 
 void ps1_interp_interrupt_from_native(PS1Context* ctx) {

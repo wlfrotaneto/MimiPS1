@@ -62,6 +62,7 @@ struct PS1Context {
     bool        in_irq;
     bool        bios_boot;          // Real BIOS boots the game (otherwise built-in HLE kernel)
     bool        native_enabled;     // Recompiled functions may be entered from the interpreter
+    bool        native_tried;       // Boot executable already validated once
     bool        in_native;          // Currently executing recompiled code
     int         interp_depth;
     bool        irq_in_queue;       // Running SysEnqIntRP handlers (kernel runs these with IRQs off)
@@ -76,6 +77,8 @@ struct PS1Context {
     // Executable bounds
     uint32_t    exe_text_addr;
     uint32_t    exe_text_size;
+    uint32_t    exe_entry;          // initial PC of the boot executable
+    uint8_t*    exe_shadow;         // pristine copy of the executable's text image
 
     // Video display / presentation options
     int         aspect_ratio; // 0 = 4:3 (original), 1 = 16:9, 2 = Stretch
@@ -97,6 +100,10 @@ void        ps1_runtime_reset(PS1Context* ctx);
 
 // Loading PlayStation Executable (.EXE / .BIN)
 bool        ps1_runtime_load_exe(PS1Context* ctx, const char* exe_path);
+
+// Recompiled code is only trusted while RAM still holds the original instructions
+void        ps1_native_check_range(PS1Context* ctx, uint32_t addr, uint32_t bytes);
+void        ps1_native_try_enable(PS1Context* ctx);
 
 // Boot through the real BIOS ROM at the reset vector / run the emulation thread
 void        ps1_runtime_boot_bios(PS1Context* ctx);

@@ -13,12 +13,15 @@ void ps1_cpu_init(PS1Context* ctx) {
 void ps1_cpu_reset(PS1Context* ctx) {
     static PS1RecompiledFunc preserved_table[PS1_FUNC_TABLE_SIZE];
     static uint8_t preserved_bits[PS1_RAM_SIZE / 4 / 8];
+    static uint8_t preserved_code[PS1_RAM_SIZE / 4 / 8];
     memcpy(preserved_table, ctx->cpu.func_table, sizeof(preserved_table));
     memcpy(preserved_bits, ctx->cpu.entry_bits, sizeof(preserved_bits));
+    memcpy(preserved_code, ctx->cpu.code_bits, sizeof(preserved_code));
 
     memset(&ctx->cpu, 0, sizeof(PS1CPU));
     memcpy(ctx->cpu.func_table, preserved_table, sizeof(preserved_table));
     memcpy(ctx->cpu.entry_bits, preserved_bits, sizeof(preserved_bits));
+    memcpy(ctx->cpu.code_bits, preserved_code, sizeof(preserved_code));
 
     ctx->cpu.cop0[COP0_PRID] = 0x00000002;
     ctx->cpu.cop0[COP0_SR]   = 0x50000401;
@@ -36,6 +39,7 @@ void ps1_register_function_range(PS1Context* ctx, uint32_t start, uint32_t end, 
     uint32_t first = (start & 0x001FFFFC) >> 2;
     uint32_t last  = (end   & 0x001FFFFC) >> 2;
     for (uint32_t off = first; off <= last && off < PS1_FUNC_TABLE_SIZE; off++) {
+        ctx->cpu.code_bits[off >> 3] |= (uint8_t)(1u << (off & 7));
         if (!ctx->cpu.func_table[off]) {
             ctx->cpu.func_table[off] = func;
         }
