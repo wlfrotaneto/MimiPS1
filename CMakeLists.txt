@@ -28,6 +28,7 @@ add_library(mimips1-runtime STATIC
     runtime/src/mimips1_memory.c
     runtime/src/mimips1_cpu.c
     runtime/src/mimips1_interp.c
+    runtime/src/mimips1_mdec.c
     runtime/src/mimips1_gte.c
     runtime/src/mimips1_gpu.c
     runtime/src/mimips1_spu.c

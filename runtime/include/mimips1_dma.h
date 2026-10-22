@@ -22,6 +22,11 @@ typedef struct {
     uint32_t bcr;   // Block Control Register
     uint32_t chcr;  // Channel Control Register
     bool     active;
+    uint32_t done_cycles;   // Cycles until the transfer completes (busy flag + IRQ)
+    bool     completing;
+    bool     waiting;       // MDEC-out transfer armed, waiting for decoded data
+    uint32_t pending_words;
+    uint32_t pending_addr;
 } DMAChannel;
 
 struct PS1DMA {
@@ -36,6 +41,9 @@ void     ps1_dma_init(PS1DMA* dma);
 void     ps1_dma_reset(PS1DMA* dma);
 uint32_t ps1_dma_read(PS1Context* ctx, uint32_t addr);
 void     ps1_dma_write(PS1Context* ctx, uint32_t addr, uint32_t val);
+
+// Advance pending DMA completions (clears busy, latches DICR flags, raises IRQ3)
+void     ps1_dma_tick(PS1Context* ctx, uint32_t cycles);
 
 // Execute DMA transfer
 void     ps1_dma_execute(PS1Context* ctx, int channel_idx);

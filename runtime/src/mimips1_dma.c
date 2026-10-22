@@ -65,12 +65,21 @@ void ps1_dma_write(PS1Context* ctx, uint32_t addr, uint32_t val) {
     }
 }
 
+static void mdec_out_pump(PS1Context* ctx, DMAChannel* ch) {
+    while (ch->pending_words && ch->pending_addr < PS1_RAM_SIZE && ctx->mdec.out_pos < ctx->mdec.out_len) {
+        *(uint32_t*)&ctx->memory.ram[ch->pending_addr] = ps1_mdec_read_data(&ctx->mdec);
+        ch->pending_addr += 4;
+        ch->pending_words--;
+    }
+}
+
 void ps1_dma_execute(PS1Context* ctx, int channel_idx) {
     DMAChannel* ch = &ctx->dma.channels[channel_idx];
     uint32_t sync_mode = (ch->chcr >> 9) & 0x03;
     ctx->dma.last_channel = channel_idx;
     ctx->dma.last_madr = ch->madr;
     ctx->dma.last_bcr = ch->bcr;
+    uint32_t words_moved = 0;
     PS1_LOG(2, "[DMA] execute ch=%d sync=%u madr=0x%08X bcr=0x%08X chcr=0x%08X\n", channel_idx, sync_mode, ch->madr, ch->bcr, ch->chcr);
 
     // GPU DMA Channel (2)
@@ -88,6 +97,7 @@ void ps1_dma_execute(PS1Context* ctx, int channel_idx) {
                     ctx->gpu.gp0_fifo_len = 0;
                 }
 
+                words_moved += packet_words + 1;
                 for (uint32_t i = 1; i <= packet_words; i++) {
                     uint32_t data_addr = (cur_addr + (i * 4)) & 0x1FFFFC;
                     if (data_addr < PS1_RAM_SIZE) {
@@ -112,6 +122,7 @@ void ps1_dma_execute(PS1Context* ctx, int channel_idx) {
             }
             uint32_t addr = ch->madr & 0x1FFFFC;
             bool to_ram = (ch->chcr & 1) == 0;
+            words_moved = word_count;
 
             for (uint32_t i = 0; i < word_count && addr < PS1_RAM_SIZE; i++) {
                 if (to_ram) {
@@ -127,6 +138,7 @@ void ps1_dma_execute(PS1Context* ctx, int channel_idx) {
     else if (channel_idx == DMA_OTC) {
         uint32_t count = ch->bcr & 0xFFFF;
         uint32_t addr = ch->madr & 0x1FFFFC;
+        words_moved = count;
 
         for (uint32_t i = 0; i < count && addr < PS1_RAM_SIZE; i++) {
             if (i == (count - 1)) {
@@ -141,6 +153,7 @@ void ps1_dma_execute(PS1Context* ctx, int channel_idx) {
     else if (channel_idx == DMA_CDROM) {
         uint32_t count = ch->bcr & 0xFFFF;
         if (count == 0) count = 0x800 / 4; // Hardware quirk: BCR=0 transfers 0x800 bytes
+        words_moved = count * 6; // CD DMA is slow (~24 cycles/word)
         uint32_t addr = ch->madr & 0x1FFFFC;
         for (uint32_t i = 0; i < count && addr < PS1_RAM_SIZE; i++) {
             if (ctx->cdrom.data_bytes_avail >= 4) {
@@ -155,6 +168,7 @@ void ps1_dma_execute(PS1Context* ctx, int channel_idx) {
     // SPU DMA Channel (4)
     else if (channel_idx == DMA_SPU) {
         uint32_t count = (ch->bcr & 0xFFFF) * (ch->bcr >> 16 ? (ch->bcr >> 16) : 1);
+        words_moved = count * 4;
         uint32_t addr = ch->madr & 0x1FFFFC;
         bool to_spu = (ch->chcr & 1) != 0;
         for (uint32_t i = 0; i < count && addr < (PS1_RAM_SIZE - 3); i++) {
@@ -170,30 +184,89 @@ void ps1_dma_execute(PS1Context* ctx, int channel_idx) {
             addr += 4;
         }
     }
-    // MDEC DMA Channels (0, 1)
+    // MDEC DMA Channels (0 = RAM -> MDEC, 1 = MDEC -> RAM)
     else if (channel_idx == DMA_MDEC_IN || channel_idx == DMA_MDEC_OUT) {
-        // Dummy MDEC transfer completion
+        uint32_t bs = ch->bcr & 0xFFFF;
+        uint32_t ba = ch->bcr >> 16;
+        uint32_t words = (sync_mode == 1) ? bs * (ba ? ba : 1) : bs;
+        if (words == 0) words = 0x10000;
+        words_moved = words * 2;
+        uint32_t addr = ch->madr & 0x1FFFFC;
+        if (channel_idx == DMA_MDEC_IN) {
+            for (uint32_t i = 0; i < words && addr < PS1_RAM_SIZE; i++, addr += 4) {
+                ps1_mdec_write_command(&ctx->mdec, *(uint32_t*)&ctx->memory.ram[addr]);
+            }
+        } else {
+            // MDEC-out is request driven: it moves data as the decoder produces it and
+            // waits otherwise. The transfer may be armed before the input has been decoded.
+            ch->pending_words = words;
+            ch->pending_addr = addr;
+            mdec_out_pump(ctx, ch);
+            if (ch->pending_words) {
+                ch->waiting = true;
+                ch->chcr |= (1u << 24);
+                ch->chcr &= ~(1u << 28);
+                return;   // completion is reported once all words have been delivered
+            }
+        }
+        PS1_LOG(2, "[MDEC] DMA%d words=%u out_len=%u out_pos=%u\n", channel_idx, words, ctx->mdec.out_len, ctx->mdec.out_pos);
     }
 
-    // Finish DMA
-    ch->chcr &= ~(1 << 24); // Clear busy flag
-    ch->chcr &= ~(1 << 28); // Clear manual trigger flag
+    // The data has moved, but completion (busy flag, DICR flag, IRQ3) is reported after the
+    // time the hardware would need. Guests routinely finish their own bookkeeping after
+    // kicking a transfer, so reporting completion immediately would run their callback first.
+    ch->chcr |= (1u << 24);
+    ch->chcr &= ~(1u << 28);
+    ch->completing = true;
+    ch->done_cycles = words_moved + 40;
+}
 
-    // Deliver SPU completion event if applicable
-    if (channel_idx == DMA_SPU) {
+static void dma_complete(PS1Context* ctx, int channel_idx) {
+    DMAChannel* ch = &ctx->dma.channels[channel_idx];
+    ch->chcr &= ~(1u << 24); // Clear busy flag
+    ch->completing = false;
+
+    // Deliver SPU completion event if applicable (HLE kernel only)
+    if (channel_idx == DMA_SPU && !ctx->bios_boot) {
         ps1_bios_deliver_event(ctx, 0xF0000009, 0x0020);
     }
 
-    // Set channel interrupt flag in DICR (bit 24 + channel_idx)
-    ctx->dma.dicr |= (1u << (24 + channel_idx));
+    // Channel interrupt flag (bit 24 + ch) is only latched when that channel's enable bit (16 + ch) is set
+    if ((ctx->dma.dicr >> (16 + channel_idx)) & 1) {
+        ctx->dma.dicr |= (1u << (24 + channel_idx));
+    }
 
-    // Recalculate Master Interrupt Flag (bit 31)
+    bool was_master = (ctx->dma.dicr & (1u << 31)) != 0;
     bool force_irq = (ctx->dma.dicr & (1 << 15)) != 0;
     bool master_en = (ctx->dma.dicr & (1 << 23)) != 0;
     uint32_t enables = (ctx->dma.dicr >> 16) & 0x7F;
     uint32_t flags = (ctx->dma.dicr >> 24) & 0x7F;
     if (force_irq || (master_en && ((enables & flags) != 0))) {
         ctx->dma.dicr |= (1u << 31);
-        ps1_trigger_irq(ctx, IRQ_DMA);
+        if (!was_master) ps1_trigger_irq(ctx, IRQ_DMA);
+    } else {
+        ctx->dma.dicr &= ~(1u << 31);
+    }
+}
+
+void ps1_dma_tick(PS1Context* ctx, uint32_t cycles) {
+    for (int i = 0; i < 7; i++) {
+        DMAChannel* ch = &ctx->dma.channels[i];
+        if (ch->waiting) {
+            mdec_out_pump(ctx, ch);
+            if (ch->pending_words == 0) {
+                ch->waiting = false;
+                ch->completing = true;
+                ch->done_cycles = 64;
+            }
+            continue;
+        }
+        if (!ch->completing) continue;
+        if (ch->done_cycles > cycles) {
+            ch->done_cycles -= cycles;
+        } else {
+            ch->done_cycles = 0;
+            dma_complete(ctx, i);
+        }
     }
 }

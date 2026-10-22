@@ -792,6 +792,8 @@ void ps1_gpu_vblank(PS1GPU* gpu) {
         static int s_dump_frame = 0;
         s_dump_frame++;
         int dump_max = atoi(dump_env) > 1 ? atoi(dump_env) : 1200;
+        const char* from_env = getenv("MIMIPS1_DUMP_FROM");
+        if (from_env && s_dump_frame < atoi(from_env)) goto skip_dump;
         const char* every_env = getenv("MIMIPS1_DUMP_EVERY");
         int every = every_env && atoi(every_env) > 0 ? atoi(every_env) : 120;
         if ((s_dump_frame % every == 0) && s_dump_frame <= dump_max) {
@@ -812,12 +814,13 @@ void ps1_gpu_vblank(PS1GPU* gpu) {
                     }
                 }
                 fclose(fp);
-                printf("[VRAM Capture] Saved 1024x512 VRAM framebuffer to %s (disp_x=%d, disp_y=%d, %dx%d)\n",
-                       path, gpu->disp_x, gpu->disp_y, gpu->disp_w, gpu->disp_h);
+                printf("[VRAM Capture] Saved 1024x512 VRAM framebuffer to %s (disp_x=%d, disp_y=%d, %dx%d, %dbpp)\n",
+                       path, gpu->disp_x, gpu->disp_y, gpu->disp_w, gpu->disp_h, (gpu->status & (1u << 21)) ? 24 : 15);
                 fflush(stdout);
             }
         }
     }
+    skip_dump:;
 
     check_gp0_stats_env();
     if (!s_gp0_stats_enabled) return;

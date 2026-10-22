@@ -168,9 +168,9 @@ uint32_t ps1_mmio_read(PS1Context* ctx, uint32_t addr, int size) {
     }
     // MDEC Registers
     else if (addr == 0x1F801820) {
-        return 0;
+        return ps1_mdec_read_data(&ctx->mdec);
     } else if (addr == 0x1F801824) {
-        return 0x80040000; // MDEC Status: FIFO empty, not busy, 15-bit output
+        return ps1_mdec_read_status(&ctx->mdec);
     }
     // Controller / SIO
     else if (addr >= 0x1F801040 && addr <= 0x1F80104E) {
@@ -216,8 +216,10 @@ void ps1_mmio_write(PS1Context* ctx, uint32_t addr, uint32_t val, int size) {
         ps1_cdrom_write(ctx, addr, (uint8_t)val);
     }
     // MDEC Registers
-    else if (addr == 0x1F801820 || addr == 0x1F801824) {
-        // MDEC command/control write stub
+    else if (addr == 0x1F801820) {
+        ps1_mdec_write_command(&ctx->mdec, val);
+    } else if (addr == 0x1F801824) {
+        ps1_mdec_write_control(&ctx->mdec, val);
     }
     // SPU
     else if (addr >= 0x1F801C00 && addr <= 0x1F801E80) {

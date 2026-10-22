@@ -179,6 +179,7 @@ def compile_native_app(recompiled_dir, app_name):
         os.path.join(runtime_src_dir, "mimips1_memory.c"),
         os.path.join(runtime_src_dir, "mimips1_cpu.c"),
         os.path.join(runtime_src_dir, "mimips1_interp.c"),
+        os.path.join(runtime_src_dir, "mimips1_mdec.c"),
         os.path.join(runtime_src_dir, "mimips1_gte.c"),
         os.path.join(runtime_src_dir, "mimips1_gpu.c"),
         os.path.join(runtime_src_dir, "mimips1_spu.c"),

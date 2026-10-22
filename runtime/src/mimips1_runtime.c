@@ -34,6 +34,7 @@ PS1Context* ps1_runtime_create(void) {
     ps1_gte_init(&ctx->gte);
     ps1_spu_init(&ctx->spu);
     ps1_dma_init(&ctx->dma);
+    ps1_mdec_init(&ctx->mdec);
     ps1_timers_init(&ctx->timers);
     ps1_cdrom_init(&ctx->cdrom);
     ps1_bios_init(ctx);
@@ -63,6 +64,7 @@ void ps1_runtime_reset(PS1Context* ctx) {
     ps1_gte_reset(&ctx->gte);
     ps1_spu_reset(&ctx->spu);
     ps1_dma_reset(&ctx->dma);
+    ps1_mdec_reset(&ctx->mdec);
     ps1_timers_reset(&ctx->timers);
     ps1_cdrom_reset(&ctx->cdrom);
     ps1_bios_reset(ctx);
@@ -342,6 +344,7 @@ static void scheduler_run(PS1Context* ctx) {
     ps1_timers_tick(ctx, delta);
     ps1_cdrom_tick(ctx, delta);
     ps1_input_tick(ctx, delta);
+    ps1_dma_tick(ctx, delta);
 #if defined(__APPLE__)
     macos_audio_tick(ctx, delta);
 #endif

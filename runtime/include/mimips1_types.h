@@ -65,6 +65,7 @@ typedef struct PS1SPU PS1SPU;
 typedef struct PS1DMA PS1DMA;
 typedef struct PS1Timers PS1Timers;
 typedef struct PS1CDROM PS1CDROM;
+typedef struct PS1MDEC PS1MDEC;
 typedef struct PS1BIOS PS1BIOS;
 typedef struct PS1Input PS1Input;
 

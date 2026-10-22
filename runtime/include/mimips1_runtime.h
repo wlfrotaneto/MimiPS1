@@ -13,6 +13,7 @@
 #include "mimips1_bios.h"
 #include "mimips1_input.h"
 #include "mimips1_card.h"
+#include "mimips1_mdec.h"
 
 #include <setjmp.h>
 
@@ -45,6 +46,7 @@ struct PS1Context {
     PS1BIOS        bios;
     PS1Input       input;
     PS1CardManager card_mgr;
+    PS1MDEC        mdec;
 
     uint32_t    irq_stat;
     uint32_t    irq_mask;

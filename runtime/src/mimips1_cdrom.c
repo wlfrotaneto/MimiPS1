@@ -69,8 +69,8 @@ void ps1_cdrom_close_image(PS1CDROM* cdrom) {
 // -------------------------------------------------------------
 #define CD_DELAY_FAST        24000u     // Typical first response (INT3)
 #define CD_DELAY_INIT        80000u
-#define CD_SECTOR_1X         225792u    // 75 sectors/s
-#define CD_SECTOR_2X         112896u    // 150 sectors/s
+#define CD_SECTOR_1X         451584u    // 75 sectors/s  (33868800 / 75)
+#define CD_SECTOR_2X         225792u    // 150 sectors/s (33868800 / 150)
 #define CD_SEEK_BASE         50000u
 #define CD_SEEK_MAX          3400000u
 
