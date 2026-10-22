@@ -122,7 +122,9 @@ MipsProgram* mips_analyze_program(const PS1Executable* exe) {
     for (int i = 0; i < entry_count; i++) {
         uint32_t start_pc = discovered_entries[i];
         uint32_t next_func_pc = (i + 1 < entry_count) ? discovered_entries[i + 1] : (exe->text_dest_addr + exe->text_size);
-        // Safety cap: never allow a single function to exceed 2048 instructions (8KB) to prevent Clang parser stack overflow
+        uint32_t natural_next_pc = next_func_pc;
+        // Safety cap: never allow a single function to exceed 2048 instructions (8KB) to prevent Clang parser stack overflow.
+        // The remainder is not dropped: a continuation entry is inserted where this chunk actually ends.
         if (next_func_pc > (start_pc + 2048 * 4)) {
             next_func_pc = start_pc + 2048 * 4;
         }
@@ -183,6 +185,16 @@ MipsProgram* mips_analyze_program(const PS1Executable* exe) {
         }
 
         fn->end_pc = cur_pc;
+
+        // Chunk hit the size cap: continue as its own function from the exact end
+        // (past any delay slot already consumed), so no code is left uncovered.
+        if (fn->end_pc < natural_next_pc && is_addr_in_text(exe, fn->end_pc) &&
+            entry_count < MAX_DISCOVERED_FUNCS) {
+            memmove(&discovered_entries[i + 2], &discovered_entries[i + 1],
+                    (size_t)(entry_count - (i + 1)) * sizeof(uint32_t));
+            discovered_entries[i + 1] = fn->end_pc;
+            entry_count++;
+        }
 
         if (!prog->first_func) prog->first_func = fn;
         if (last_func) last_func->next = fn;

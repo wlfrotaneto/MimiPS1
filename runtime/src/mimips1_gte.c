@@ -26,18 +26,18 @@ static const uint8_t gte_unr_table[257] = {
 };
 
 static inline void check_mac1_overflow(PS1GTE* gte, int64_t mac) {
-    if (mac < -0x80000000000LL) gte->flag |= (1u << 30);
-    else if (mac > 0x7FFFFFFFFFFLL) gte->flag |= (1u << 27);
+    if (mac < -0x80000000000LL) gte->flag |= (1u << 27);
+    else if (mac > 0x7FFFFFFFFFFLL) gte->flag |= (1u << 30);
 }
 
 static inline void check_mac2_overflow(PS1GTE* gte, int64_t mac) {
-    if (mac < -0x80000000000LL) gte->flag |= (1u << 29);
-    else if (mac > 0x7FFFFFFFFFFLL) gte->flag |= (1u << 26);
+    if (mac < -0x80000000000LL) gte->flag |= (1u << 26);
+    else if (mac > 0x7FFFFFFFFFFLL) gte->flag |= (1u << 29);
 }
 
 static inline void check_mac3_overflow(PS1GTE* gte, int64_t mac) {
-    if (mac < -0x80000000000LL) gte->flag |= (1u << 28);
-    else if (mac > 0x7FFFFFFFFFFLL) gte->flag |= (1u << 25);
+    if (mac < -0x80000000000LL) gte->flag |= (1u << 25);
+    else if (mac > 0x7FFFFFFFFFFLL) gte->flag |= (1u << 28);
 }
 
 static inline void check_mac0_overflow(PS1GTE* gte, int64_t mac) {
@@ -224,7 +224,7 @@ uint32_t ps1_gte_get_data(PS1GTE* gte, uint32_t reg) {
         case 25: return (uint32_t)gte->mac[1];
         case 26: return (uint32_t)gte->mac[2];
         case 27: return (uint32_t)gte->mac[3];
-        case 28: return gte->irgb;
+        case 28:
         case 29: {
             uint32_t r = (gte->ir[1] < 0) ? 0 : (gte->ir[1] > 0x1F * 0x80 ? 0x1F : (uint32_t)(gte->ir[1] / 0x80));
             uint32_t g = (gte->ir[2] < 0) ? 0 : (gte->ir[2] > 0x1F * 0x80 ? 0x1F : (uint32_t)(gte->ir[2] / 0x80));
@@ -435,7 +435,7 @@ void ps1_gte_set_ctrl(PS1GTE* gte, uint32_t reg, uint32_t val) {
 }
 
 // Transform single vertex helper for RTPS and RTPT
-static void gte_rtps_vertex(PS1GTE* gte, int v_idx, bool sf, bool is_last_vertex) {
+static void gte_rtps_vertex(PS1GTE* gte, int v_idx, bool sf, bool lm, bool is_last_vertex) {
     int16_t vx = gte->v[v_idx][0];
     int16_t vy = gte->v[v_idx][1];
     int16_t vz = gte->v[v_idx][2];
@@ -461,17 +461,20 @@ static void gte_rtps_vertex(PS1GTE* gte, int v_idx, bool sf, bool is_last_vertex
     gte->mac[2] = (int32_t)(mac2 >> (sf ? 12 : 0));
     gte->mac[3] = (int32_t)(mac3 >> (sf ? 12 : 0));
 
-    gte->ir[1] = clamp_ir1(gte, gte->mac[1], false);
-    gte->ir[2] = clamp_ir2(gte, gte->mac[2], false);
+    gte->ir[1] = clamp_ir1(gte, gte->mac[1], lm);
+    gte->ir[2] = clamp_ir2(gte, gte->mac[2], lm);
 
     // IR3 Quirk in RTPS/RTPT: flag 22 is checked against MAC3 >> 12 regardless of sf
     int64_t mac3_sar12 = mac3 >> 12;
     if (mac3_sar12 < -0x8000 || mac3_sar12 > 0x7FFF) {
         gte->flag |= (1u << 22);
     }
-    if (gte->mac[3] < -0x8000) gte->ir[3] = -0x8000;
-    else if (gte->mac[3] > 0x7FFF) gte->ir[3] = 0x7FFF;
-    else gte->ir[3] = (int16_t)gte->mac[3];
+    {
+        int32_t lo3 = lm ? 0 : -0x8000;
+        if (gte->mac[3] < lo3) gte->ir[3] = (int16_t)lo3;
+        else if (gte->mac[3] > 0x7FFF) gte->ir[3] = 0x7FFF;
+        else gte->ir[3] = (int16_t)gte->mac[3];
+    }
 
     // SZ3 = MAC3 >> ((1 - sf) * 12) saturated to 0..0xFFFF
     int64_t sz3_raw = (int64_t)gte->mac[3] >> ((1 - (sf ? 1 : 0)) * 12);
@@ -529,7 +532,8 @@ static void gte_rtps_vertex(PS1GTE* gte, int v_idx, bool sf, bool is_last_vertex
 void ps1_gte_rtps(PS1GTE* gte, uint32_t instruction) {
     gte->flag = 0;
     bool sf = (instruction & (1 << 19)) != 0;
-    gte_rtps_vertex(gte, 0, sf, true);
+    bool lm = (instruction & (1 << 10)) != 0;
+    gte_rtps_vertex(gte, 0, sf, lm, true);
     if (gte->flag & 0x7F87E000) gte->flag |= (1u << 31);
 }
 
@@ -537,9 +541,10 @@ void ps1_gte_rtps(PS1GTE* gte, uint32_t instruction) {
 void ps1_gte_rtpt(PS1GTE* gte, uint32_t instruction) {
     gte->flag = 0;
     bool sf = (instruction & (1 << 19)) != 0;
-    gte_rtps_vertex(gte, 0, sf, false);
-    gte_rtps_vertex(gte, 1, sf, false);
-    gte_rtps_vertex(gte, 2, sf, true);
+    bool lm = (instruction & (1 << 10)) != 0;
+    gte_rtps_vertex(gte, 0, sf, lm, false);
+    gte_rtps_vertex(gte, 1, sf, lm, false);
+    gte_rtps_vertex(gte, 2, sf, lm, true);
     if (gte->flag & 0x7F87E000) gte->flag |= (1u << 31);
 }
 

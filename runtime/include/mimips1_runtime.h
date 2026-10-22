@@ -134,6 +134,14 @@ uint64_t    macos_audio_get_underruns(void);
 
 #define CALL_INDIRECT(t) ps1_call_indirect(ctx, (t))
 
+// Optional function-entry tracing (build with -DPS1_TRACE; MIMIPS1_TRACE=addr,addr,... at runtime)
+#ifdef PS1_TRACE
+void ps1_trace_enter(PS1Context* ctx, uint32_t addr);
+#define PS1_TRACE_ENTER(a) ps1_trace_enter(ctx, (a))
+#else
+#define PS1_TRACE_ENTER(a) ((void)0)
+#endif
+
 #ifdef __cplusplus
 }
 #endif

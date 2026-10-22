@@ -244,6 +244,7 @@ bool mips_emit_c_code(const MipsProgram* prog, const EmitterOptions* opts) {
         fprintf(fc, "    uint32_t _call_target = 0;\n");
         fprintf(fc, "    uint32_t _jr_target = 0;\n");
         fprintf(fc, "    if (_mid_entry) goto dispatch_entry;\n");
+        fprintf(fc, "    PS1_TRACE_ENTER(0x%08X);\n", fn->entry_pc);
 
         MipsBlock* blk = fn->first_block;
         while (blk) {

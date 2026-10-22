@@ -2,12 +2,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
 
 int g_mimips1_log_level = -1;
 
+void ps1_trace_report(void);
 #define SCHED_QUANTUM_CYCLES 64
 #define PS1_VBLANK_PERIOD    ((uint64_t)(PS1_CPU_CLOCK_HZ / 59.94))
 #define PS1_FRAME_NS         16683333ULL
@@ -279,6 +281,48 @@ static void pace_frame(PS1Context* ctx) {
     }
 }
 
+// Scripted pad input for headless testing: MIMIPS1_INPUT="start@300+8,cross@500+4"
+// presses a button at the given frame for the given number of frames.
+typedef struct { PS1Button btn; uint64_t from, to; } InputStep;
+
+static void apply_scripted_input(PS1Context* ctx) {
+    static InputStep steps[64];
+    static int nsteps = -1;
+    if (nsteps < 0) {
+        nsteps = 0;
+        static const struct { const char* name; PS1Button btn; } names[] = {
+            {"start", PS1_BTN_START}, {"select", PS1_BTN_SELECT}, {"up", PS1_BTN_UP}, {"down", PS1_BTN_DOWN},
+            {"left", PS1_BTN_LEFT}, {"right", PS1_BTN_RIGHT}, {"cross", PS1_BTN_CROSS}, {"circle", PS1_BTN_CIRCLE},
+            {"square", PS1_BTN_SQUARE}, {"triangle", PS1_BTN_TRIANGLE}, {"l1", PS1_BTN_L1}, {"r1", PS1_BTN_R1},
+            {"l2", PS1_BTN_L2}, {"r2", PS1_BTN_R2},
+        };
+        const char* env = getenv("MIMIPS1_INPUT");
+        char buf[512];
+        if (env) {
+            strncpy(buf, env, sizeof(buf) - 1);
+            buf[sizeof(buf) - 1] = '\0';
+            for (char* tok = strtok(buf, ","); tok && nsteps < 64; tok = strtok(NULL, ",")) {
+                char* at = strchr(tok, '@');
+                if (!at) continue;
+                *at = '\0';
+                unsigned long from = strtoul(at + 1, NULL, 10);
+                char* plus = strchr(at + 1, '+');
+                unsigned long len = plus ? strtoul(plus + 1, NULL, 10) : 4;
+                for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+                    if (strcasecmp(tok, names[i].name) == 0) {
+                        steps[nsteps++] = (InputStep){ names[i].btn, from, from + len };
+                    }
+                }
+            }
+        }
+    }
+    for (int i = 0; i < nsteps; i++) {
+        bool down = ctx->frame_count >= steps[i].from && ctx->frame_count < steps[i].to;
+        ps1_input_set_button(&ctx->input, 0, steps[i].btn, down);
+    }
+    PS1_LOG(2, "[PAD] frame=%llu buttons=%04X active=%d dest=%08X mem=%08X\n", (unsigned long long)ctx->frame_count, ctx->input.pads[0].buttons, ctx->bios.pad_active, ctx->bios.pad_button_dest, ctx->bios.pad_button_dest ? ps1_mem_read32(ctx, ctx->bios.pad_button_dest) : 0);
+}
+
 static void scheduler_run(PS1Context* ctx) {
     uint32_t delta = (uint32_t)(ctx->cycle_counter - ctx->last_sched_cycle);
     ctx->last_sched_cycle = ctx->cycle_counter;
@@ -301,6 +345,8 @@ static void scheduler_run(PS1Context* ctx) {
             fflush(stdout);
         }
 
+        if ((ctx->frame_count % 60) == 0) ps1_trace_report();
+        apply_scripted_input(ctx);
         ps1_bios_update_pads(ctx);
         ps1_trigger_irq(ctx, IRQ_VBLANK);
         ps1_gpu_vblank(&ctx->gpu);
@@ -331,3 +377,38 @@ void ps1_runtime_run_frame(PS1Context* ctx) {
         ps1_call_indirect(ctx, ctx->cpu.pc);
     }
 }
+
+#ifdef PS1_TRACE
+// Counts entries of the functions listed in MIMIPS1_TRACE and prints the deltas on every heartbeat.
+#define TRACE_MAX 32
+static uint32_t s_trace_addr[TRACE_MAX];
+static uint64_t s_trace_count[TRACE_MAX];
+static int s_trace_n = -1;
+
+void ps1_trace_enter(PS1Context* ctx, uint32_t addr) {
+    (void)ctx;
+    if (s_trace_n < 0) {
+        s_trace_n = 0;
+        const char* env = getenv("MIMIPS1_TRACE");
+        char buf[512];
+        if (env) {
+            strncpy(buf, env, sizeof(buf) - 1);
+            buf[sizeof(buf) - 1] = '\0';
+            for (char* t = strtok(buf, ","); t && s_trace_n < TRACE_MAX; t = strtok(NULL, ",")) {
+                s_trace_addr[s_trace_n++] = (uint32_t)strtoul(t, NULL, 16);
+            }
+        }
+    }
+    for (int i = 0; i < s_trace_n; i++) {
+        if (s_trace_addr[i] == addr) { s_trace_count[i]++; break; }
+    }
+}
+
+void ps1_trace_report(void) {
+    for (int i = 0; i < s_trace_n; i++) {
+        printf("[TRACE] %08X calls=%llu\n", s_trace_addr[i], (unsigned long long)s_trace_count[i]);
+    }
+}
+#else
+void ps1_trace_report(void) {}
+#endif

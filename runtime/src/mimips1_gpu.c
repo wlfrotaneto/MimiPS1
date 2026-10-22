@@ -791,7 +791,10 @@ void ps1_gpu_vblank(PS1GPU* gpu) {
     if (dump_env) {
         static int s_dump_frame = 0;
         s_dump_frame++;
-        if ((s_dump_frame % 120 == 0) && s_dump_frame <= 1200) {
+        int dump_max = atoi(dump_env) > 1 ? atoi(dump_env) : 1200;
+        const char* every_env = getenv("MIMIPS1_DUMP_EVERY");
+        int every = every_env && atoi(every_env) > 0 ? atoi(every_env) : 120;
+        if ((s_dump_frame % every == 0) && s_dump_frame <= dump_max) {
             char path[128];
             snprintf(path, sizeof(path), "/tmp/vram_frame_%d.ppm", s_dump_frame);
             FILE* fp = fopen(path, "wb");
