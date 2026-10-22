@@ -174,7 +174,9 @@ uint32_t ps1_mmio_read(PS1Context* ctx, uint32_t addr, int size) {
     }
     // Controller / SIO
     else if (addr >= 0x1F801040 && addr <= 0x1F80104E) {
-        return ps1_input_read16(&ctx->input, addr);
+        uint32_t v = ps1_input_read16(&ctx->input, addr);
+        PS1_LOG(3, "[SIO R] %08X -> %04X (pc=%08X ra=%08X)\n", addr, v, ctx->cpu.pc, ctx->cpu.r[31]);
+        return v;
     }
     return 0;
 }
@@ -223,6 +225,7 @@ void ps1_mmio_write(PS1Context* ctx, uint32_t addr, uint32_t val, int size) {
     }
     // Controller / SIO
     else if (addr >= 0x1F801040 && addr <= 0x1F80104E) {
+        PS1_LOG(3, "[SIO W] %08X <- %04X (pc=%08X)\n", addr, val & 0xFFFF, ctx->cpu.pc);
         ps1_input_write16(&ctx->input, addr, (uint16_t)val);
     }
 }

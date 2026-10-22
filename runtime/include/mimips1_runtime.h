@@ -58,6 +58,7 @@ struct PS1Context {
     uint32_t    cycles_since_vblank;
     bool        in_tick;
     bool        in_irq;
+    bool        irq_in_queue;       // Running SysEnqIntRP handlers (kernel runs these with IRQs off)
     int         irq_depth;          // Nesting level of guest interrupt callbacks
     jmp_buf     irq_env;
     bool        in_irq_handler;

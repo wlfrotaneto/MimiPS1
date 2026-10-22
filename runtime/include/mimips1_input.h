@@ -34,6 +34,11 @@ struct PS1Input {
     int      pad_state;
     int      pad_byte_idx;
 
+    // Byte transfer in flight: completes (RX ready, ACK/IRQ7) after xfer_cycles
+    bool     xfer_busy;
+    bool     xfer_ack;          // Device pulses /ACK at the end of this byte
+    uint32_t xfer_cycles;
+
     PS1RumbleCallback rumble_cb;
     void*             rumble_userdata;
 };
@@ -47,6 +52,7 @@ void     ps1_input_set_rumble_callback(PS1Input* input, PS1RumbleCallback cb, vo
 
 uint16_t ps1_input_read16(PS1Input* input, uint32_t addr);
 void     ps1_input_write16(PS1Input* input, uint32_t addr, uint16_t val);
+void     ps1_input_tick(PS1Context* ctx, uint32_t cycles);
 
 #ifdef __cplusplus
 }

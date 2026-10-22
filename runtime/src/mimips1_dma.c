@@ -136,20 +136,6 @@ void ps1_dma_execute(PS1Context* ctx, int channel_idx) {
     }
     // CD-ROM DMA Channel (3)
     else if (channel_idx == DMA_CDROM) {
-        if (ctx->cdrom.data_bytes_avail < 4 && ctx->cdrom.reading && ctx->cdrom.image_file) {
-            bool subheader_mode = (ctx->cdrom.mode & 0x20) != 0;
-            uint32_t sec_offset = (ctx->cdrom.is_raw ? (subheader_mode ? 12 : 24) : 0);
-            uint32_t sec_size = subheader_mode ? (ctx->cdrom.is_raw ? 2340 : 2048) : CDROM_SECTOR_SIZE_DATA;
-            long offset = (long)ctx->cdrom.current_lba * ctx->cdrom.sector_size + sec_offset;
-            fseek(ctx->cdrom.image_file, offset, SEEK_SET);
-            size_t r = fread(ctx->cdrom.data_fifo, 1, sec_size, ctx->cdrom.image_file);
-            if (r > 0) {
-                ctx->cdrom.data_bytes_avail = (int)r;
-                ctx->cdrom.data_read_pos = 0;
-                ctx->cdrom.last_read_lba = ctx->cdrom.current_lba;
-                ctx->cdrom.current_lba++;
-            }
-        }
         uint32_t count = ch->bcr & 0xFFFF;
         if (count == 0) count = 0x800 / 4; // Hardware quirk: BCR=0 transfers 0x800 bytes
         uint32_t addr = ch->madr & 0x1FFFFC;

@@ -1,11 +1,13 @@
 #include "mimips1_cdrom.h"
 #include "mimips1_runtime.h"
 #include <string.h>
+#include <stdlib.h>
 
 void ps1_cdrom_init(PS1CDROM* cdrom) {
     memset(cdrom, 0, sizeof(PS1CDROM));
     cdrom->status = CD_STAT_SPINDLE_ON;
     cdrom->sector_size = CDROM_SECTOR_SIZE_DATA;
+    cdrom->irq_enable = 0x1F; // State the real BIOS leaves behind; games rely on it
 }
 
 void ps1_cdrom_reset(PS1CDROM* cdrom) {
@@ -14,6 +16,14 @@ void ps1_cdrom_reset(PS1CDROM* cdrom) {
     cdrom->seeking = false;
     cdrom->param_count = 0;
     cdrom->response_count = 0;
+    cdrom->response_read_pos = 0;
+    cdrom->irq_flag = 0;
+    cdrom->irq_enable = 0x1F;
+    cdrom->busy = false;
+    cdrom->setloc_pending = false;
+    cdrom->sector_len = 0;
+    cdrom->data_bytes_avail = 0;
+    cdrom->ev[0].valid = cdrom->ev[1].valid = false;
 }
 
 bool ps1_cdrom_open_image(PS1CDROM* cdrom, const char* path) {
@@ -54,40 +64,108 @@ void ps1_cdrom_close_image(PS1CDROM* cdrom) {
     }
 }
 
-static void push_response(PS1CDROM* cdrom, uint8_t val) {
-    if (cdrom->response_count < 16) {
-        cdrom->response_fifo[cdrom->response_count++] = val;
+// -------------------------------------------------------------
+// Controller timing (CPU cycles @ 33.8688 MHz)
+// -------------------------------------------------------------
+#define CD_DELAY_FAST        24000u     // Typical first response (INT3)
+#define CD_DELAY_INIT        80000u
+#define CD_SECTOR_1X         225792u    // 75 sectors/s
+#define CD_SECTOR_2X         112896u    // 150 sectors/s
+#define CD_SEEK_BASE         50000u
+#define CD_SEEK_MAX          3400000u
+
+// Optional load-time speedup for development (MIMIPS1_CD_SPEEDUP=N, default 1 = real speed)
+static uint32_t cd_speedup(void) {
+    static int v = 0;
+    if (!v) {
+        const char* e = getenv("MIMIPS1_CD_SPEEDUP");
+        v = (e && atoi(e) > 0) ? atoi(e) : 1;
     }
+    return (uint32_t)v;
+}
+
+static inline uint32_t cd_sector_period(const PS1CDROM* cd) {
+    return ((cd->mode & 0x80) ? CD_SECTOR_2X : CD_SECTOR_1X) / cd_speedup();
+}
+
+static uint32_t cd_seek_delay(const PS1CDROM* cd, uint32_t target) {
+    uint32_t dist = target > cd->current_lba ? target - cd->current_lba : cd->current_lba - target;
+    if (dist == 0) return 0;
+    uint64_t d = CD_SEEK_BASE + (uint64_t)dist * 60u;
+    return (uint32_t)(d > CD_SEEK_MAX ? CD_SEEK_MAX : d) / cd_speedup();
+}
+
+static inline uint8_t to_bcd8(uint32_t v) { return (uint8_t)(((v / 10) << 4) | (v % 10)); }
+static inline uint32_t from_bcd8(uint8_t v) { return (uint32_t)((v >> 4) * 10 + (v & 0xF)); }
+
+// Queue a response. slot 0 = first response (INT3/INT5), slot 1 = second (INT2).
+// Delay for slot 1 counts from the moment slot 0 has been delivered.
+static void cd_queue(PS1CDROM* cd, int slot, uint32_t delay, uint8_t type, const uint8_t* data, int len) {
+    CDEvent* e = &cd->ev[slot];
+    e->valid = true;
+    e->delay = delay;
+    e->type = type;
+    e->len = (uint8_t)(len > 16 ? 16 : len);
+    memcpy(e->data, data, e->len);
+}
+
+static void cd_queue_stat(PS1CDROM* cd, int slot, uint32_t delay, uint8_t type) {
+    cd_queue(cd, slot, delay, type, &cd->status, 1);
+}
+
+static void cd_error(PS1CDROM* cd, uint8_t code) {
+    uint8_t r[2] = { (uint8_t)(cd->status | CD_STAT_SEEK_ERROR), code };
+    cd_queue(cd, 0, CD_DELAY_FAST, 5, r, 2);
+}
+
+// Raise the CPU interrupt only if the flag is enabled in the INT enable register
+static void cd_update_irq(PS1Context* ctx) {
+    if (ctx->cdrom.irq_flag & ctx->cdrom.irq_enable & 0x1F) {
+        ps1_trigger_irq(ctx, IRQ_CDROM);
+    }
+}
+
+static void cd_post(PS1Context* ctx, CDEvent* e) {
+    PS1CDROM* cd = &ctx->cdrom;
+    memcpy(cd->response_fifo, e->data, e->len);
+    cd->response_count = e->len;
+    cd->response_read_pos = 0;
+    cd->irq_flag = e->type;
+    e->valid = false;
+    cd_update_irq(ctx);
+}
+
+static void cd_stop_motion(PS1CDROM* cd) {
+    cd->reading = false;
+    cd->playing = false;
+    cd->status &= ~(CD_STAT_READ_BIT | CD_STAT_PLAY_BIT | CD_STAT_SEEK_BIT);
 }
 
 static void handle_cdrom_command(PS1Context* ctx, uint8_t cmd) {
     PS1CDROM* cd = &ctx->cdrom;
-    PS1_LOG(2, "[CDROM] Command 0x%02X (params=%d)\n", cmd, cd->param_count);
-    cd->response_count = 0;
-    cd->response_read_pos = 0;
+    int np = cd->param_count;
+    PS1_LOG(2, "[CDROM] Command 0x%02X (params=%d)\n", cmd, np);
+
+    cd->busy = true;
+    cd->ev[0].valid = false;
+    cd->ev[1].valid = false;
 
     switch (cmd) {
         case 0x01: // Getstat
-            push_response(cd, cd->status);
-            cd->irq_flag = 3;
+            cd_queue_stat(cd, 0, CD_DELAY_FAST, 3);
             break;
-        case 0x02: // Setloc (M, S, F)
-            if (cd->param_count >= 3) {
-                cd->target_m = cd->param_fifo[0];
-                cd->target_s = cd->param_fifo[1];
-                cd->target_f = cd->param_fifo[2];
-                // BCD to LBA conversion
-                uint32_t m = ((cd->target_m >> 4) * 10) + (cd->target_m & 0xF);
-                uint32_t s = ((cd->target_s >> 4) * 10) + (cd->target_s & 0xF);
-                uint32_t f = ((cd->target_f >> 4) * 10) + (cd->target_f & 0xF);
-                cd->current_lba = (m * 60 * 75) + (s * 75) + f;
-                if (cd->current_lba >= 150) cd->current_lba -= 150; // 2-second pregap
-                cd->last_read_lba = cd->current_lba;
-                PS1_LOG(2, "[CDROM] Setloc %02X:%02X:%02X (%u:%u:%u) -> LBA %u\n",
-                       cd->target_m, cd->target_s, cd->target_f, m, s, f, cd->current_lba);
+        case 0x02: // Setloc (M, S, F): only latches the target, the seek happens on Seek/Read
+            if (np < 3) { cd_error(cd, 0x20); break; }
+            {
+                uint32_t m = from_bcd8(cd->param_fifo[0]);
+                uint32_t s = from_bcd8(cd->param_fifo[1]);
+                uint32_t f = from_bcd8(cd->param_fifo[2]);
+                uint32_t abs_lba = (m * 60 * 75) + (s * 75) + f;
+                cd->seek_lba = abs_lba >= 150 ? abs_lba - 150 : 0; // 2-second pregap
+                cd->setloc_pending = true;
+                PS1_LOG(2, "[CDROM] Setloc %02u:%02u:%02u -> LBA %u\n", m, s, f, cd->seek_lba);
             }
-            push_response(cd, cd->status);
-            cd->irq_flag = 3;
+            cd_queue_stat(cd, 0, CD_DELAY_FAST, 3);
             break;
         case 0x03: // Play
             cd->reading = false;
@@ -95,205 +173,232 @@ static void handle_cdrom_command(PS1Context* ctx, uint8_t cmd) {
             cd->status |= CD_STAT_PLAY_BIT;
             cd->status &= ~CD_STAT_READ_BIT;
             cd->cdda_sample_offset = 0;
-            push_response(cd, cd->status);
-            cd->irq_flag = 3;
+            cd_queue_stat(cd, 0, CD_DELAY_FAST, 3);
             break;
         case 0x06: // ReadN
         case 0x1B: // ReadS
-            cd->status &= ~CD_STAT_SEEK_BIT;
+        {
+            uint32_t seek = 0;
+            if (cd->setloc_pending) {
+                seek = cd_seek_delay(cd, cd->seek_lba);
+                cd->current_lba = cd->seek_lba;
+                cd->setloc_pending = false;
+            }
+            cd->playing = false;
+            cd->status &= ~(CD_STAT_PLAY_BIT | CD_STAT_SEEK_BIT);
             cd->status |= CD_STAT_READ_BIT;
-            cd->seeking = false;
-            cd->pending_int2 = false;
             cd->reading = true;
-            cd->read_cycles = 0;
-            PS1_LOG(2, "[CDROM] ReadN started at LBA %u (mode=0x%02X)\n", cd->current_lba, cd->mode);
-            push_response(cd, cd->status);
-            cd->irq_flag = 3;
+            cd->sector_cycles = seek + cd_sector_period(cd);
+            PS1_LOG(2, "[CDROM] Read started at LBA %u (mode=0x%02X, seek=%u)\n", cd->current_lba, cd->mode, seek);
+            cd_queue_stat(cd, 0, CD_DELAY_FAST, 3);
+            break;
+        }
+        case 0x07: // MotorOn
+            cd->status |= CD_STAT_SPINDLE_ON;
+            cd_queue_stat(cd, 0, CD_DELAY_FAST, 3);
+            cd_queue_stat(cd, 1, 400000, 2);
             break;
         case 0x08: // Stop
-            cd->playing = false;
-            cd->reading = false;
-            cd->read_cycles = 0;
-            cd->status &= ~(CD_STAT_READ_BIT | CD_STAT_PLAY_BIT);
-            push_response(cd, cd->status);
-            cd->irq_flag = 3;
-            cd->pending_int2 = true;
-            cd->int2_delay_cycles = 1000;
+            cd_queue_stat(cd, 0, CD_DELAY_FAST, 3);
+            cd_stop_motion(cd);
+            cd->status &= ~CD_STAT_SPINDLE_ON;
+            cd_queue_stat(cd, 1, 5000000, 2);
             break;
         case 0x09: // Pause
-            cd->reading = false;
-            cd->playing = false;
-            cd->read_cycles = 0;
-            cd->status &= ~(CD_STAT_READ_BIT | CD_STAT_PLAY_BIT);
+        {
+            bool was_reading = cd->reading || cd->playing;
+            cd_queue_stat(cd, 0, CD_DELAY_FAST, 3);
+            cd_stop_motion(cd);
             PS1_LOG(2, "[CDROM] Pause at LBA %u\n", cd->current_lba);
-            push_response(cd, cd->status);
-            cd->irq_flag = 3;
-            cd->pending_int2 = true;
-            cd->int2_delay_cycles = 1000;
+            cd_queue_stat(cd, 1, was_reading ? 1100000 : 135000, 2);
             break;
+        }
         case 0x0A: // Init
-            cd->reading = false;
-            cd->playing = false;
-            cd->read_cycles = 0;
+            cd_queue_stat(cd, 0, CD_DELAY_INIT, 3);
+            cd_stop_motion(cd);
+            cd->mode = 0x20;
+            cd->setloc_pending = false;
             cd->status = CD_STAT_SPINDLE_ON;
-            push_response(cd, cd->status);
-            cd->irq_flag = 3;
-            cd->pending_int2 = true;
-            cd->int2_delay_cycles = 1000;
+            cd_queue_stat(cd, 1, 120000, 2);
             break;
         case 0x0B: // Mute
             cd->muted = true;
-            push_response(cd, cd->status);
-            cd->irq_flag = 3;
+            cd_queue_stat(cd, 0, CD_DELAY_FAST, 3);
             break;
         case 0x0C: // Demute
             cd->muted = false;
-            push_response(cd, cd->status);
-            cd->irq_flag = 3;
+            cd_queue_stat(cd, 0, CD_DELAY_FAST, 3);
+            break;
+        case 0x0D: // Setfilter (file, channel)
+            if (np < 2) { cd_error(cd, 0x20); break; }
+            cd->filter_file = cd->param_fifo[0];
+            cd->filter_channel = cd->param_fifo[1];
+            cd_queue_stat(cd, 0, CD_DELAY_FAST, 3);
             break;
         case 0x0E: // Setmode
-            if (cd->param_count > 0) cd->mode = cd->param_fifo[0];
-            push_response(cd, cd->status);
-            cd->irq_flag = 3;
+            if (np < 1) { cd_error(cd, 0x20); break; }
+            cd->mode = cd->param_fifo[0];
+            cd_queue_stat(cd, 0, CD_DELAY_FAST, 3);
             break;
-        case 0x10: // GetlocL (4 bytes header + 4 bytes subheader)
+        case 0x0F: // Getparam
+        {
+            uint8_t r[5] = { cd->status, cd->mode, 0x00, cd->filter_file, cd->filter_channel };
+            cd_queue(cd, 0, CD_DELAY_FAST, 3, r, 5);
+            break;
+        }
+        case 0x10: // GetlocL (header + subheader of the last sector read)
+        {
+            uint8_t r[8] = {0};
             if (cd->image_file && cd->is_raw) {
-                uint8_t hdr[8] = {0};
-                uint32_t lba_idx = cd->last_read_lba;
-                long off = (long)lba_idx * cd->sector_size + 12;
-                fseek(cd->image_file, off, SEEK_SET);
-                size_t r = fread(hdr, 1, 8, cd->image_file);
-                (void)r;
-                for (int i = 0; i < 8; i++) push_response(cd, hdr[i]);
+                fseek(cd->image_file, (long)cd->last_read_lba * cd->sector_size + 12, SEEK_SET);
+                if (fread(r, 1, 8, cd->image_file) != 8) memset(r, 0, sizeof(r));
             } else {
                 uint32_t lba = cd->last_read_lba + 150;
-                uint8_t m = (uint8_t)(lba / (60 * 75));
-                uint8_t s = (uint8_t)((lba % (60 * 75)) / 75);
-                uint8_t f = (uint8_t)(lba % 75);
-                push_response(cd, ((m / 10) << 4) | (m % 10));
-                push_response(cd, ((s / 10) << 4) | (s % 10));
-                push_response(cd, ((f / 10) << 4) | (f % 10));
-                push_response(cd, 0x02); // Mode 2 Form 1
-                for (int i = 0; i < 4; i++) push_response(cd, 0x00);
+                r[0] = to_bcd8(lba / (60 * 75));
+                r[1] = to_bcd8((lba % (60 * 75)) / 75);
+                r[2] = to_bcd8(lba % 75);
+                r[3] = 0x02; // Mode 2
             }
-            cd->irq_flag = 3;
+            cd_queue(cd, 0, CD_DELAY_FAST, 3, r, 8);
             break;
-        case 0x11: // GetlocP (Track, Index, Relative M/S/F, Absolute M/S/F)
-            {
-                uint32_t rel_lba = cd->last_read_lba;
-                uint32_t abs_lba = rel_lba + 150;
-                uint8_t rm = (uint8_t)(rel_lba / (60 * 75));
-                uint8_t rs = (uint8_t)((rel_lba % (60 * 75)) / 75);
-                uint8_t rf = (uint8_t)(rel_lba % 75);
-                uint8_t am = (uint8_t)(abs_lba / (60 * 75));
-                uint8_t as = (uint8_t)((abs_lba % (60 * 75)) / 75);
-                uint8_t af = (uint8_t)(abs_lba % 75);
-                push_response(cd, 0x01); // Track 1
-                push_response(cd, 0x01); // Index 1
-                push_response(cd, ((rm / 10) << 4) | (rm % 10));
-                push_response(cd, ((rs / 10) << 4) | (rs % 10));
-                push_response(cd, ((rf / 10) << 4) | (rf % 10));
-                push_response(cd, ((am / 10) << 4) | (am % 10));
-                push_response(cd, ((as / 10) << 4) | (as % 10));
-                push_response(cd, ((af / 10) << 4) | (af % 10));
-                cd->irq_flag = 3;
-            }
+        }
+        case 0x11: // GetlocP (Track, Index, Relative MM:SS:FF, Absolute MM:SS:FF)
+        {
+            uint32_t rel = cd->last_read_lba, abs_lba = rel + 150;
+            uint8_t r[8] = { 0x01, 0x01,
+                to_bcd8(rel / (60 * 75)), to_bcd8((rel % (60 * 75)) / 75), to_bcd8(rel % 75),
+                to_bcd8(abs_lba / (60 * 75)), to_bcd8((abs_lba % (60 * 75)) / 75), to_bcd8(abs_lba % 75) };
+            cd_queue(cd, 0, CD_DELAY_FAST, 3, r, 8);
             break;
+        }
+        case 0x12: // SetSession
+            cd_queue_stat(cd, 0, CD_DELAY_FAST, 3);
+            cd_queue_stat(cd, 1, 200000, 2);
+            break;
+        case 0x13: // GetTN (first, last track)
+        {
+            uint8_t r[3] = { cd->status, 0x01, 0x01 };
+            cd_queue(cd, 0, CD_DELAY_FAST, 3, r, 3);
+            break;
+        }
+        case 0x14: // GetTD (track): MM:SS of track start (0 = end of disc)
+        {
+            uint32_t lba = (np >= 1 && cd->param_fifo[0] == 0) ? cd->total_sectors + 150 : 150;
+            uint8_t r[3] = { cd->status, to_bcd8(lba / (60 * 75)), to_bcd8((lba % (60 * 75)) / 75) };
+            cd_queue(cd, 0, CD_DELAY_FAST, 3, r, 3);
+            break;
+        }
         case 0x15: // SeekL
         case 0x16: // SeekP
-            cd->seeking = true;
+        {
+            uint32_t seek = 0;
+            if (cd->setloc_pending) {
+                seek = cd_seek_delay(cd, cd->seek_lba);
+                cd->current_lba = cd->seek_lba;
+                cd->setloc_pending = false;
+            }
             cd->last_read_lba = cd->current_lba;
-            cd->status |= CD_STAT_SEEK_BIT;
-            push_response(cd, cd->status);
-            cd->irq_flag = 3;
-            cd->pending_int2 = true;
-            cd->int2_delay_cycles = 1000;
+            cd_stop_motion(cd);
+            cd_queue_stat(cd, 0, CD_DELAY_FAST, 3);
+            cd_queue_stat(cd, 1, seek + 50000, 2);
             break;
+        }
         case 0x19: // Test
-            push_response(cd, 0x94); // PSX CD-ROM version
-            push_response(cd, 0x09);
-            push_response(cd, 0x19);
-            push_response(cd, 0xC0);
-            cd->irq_flag = 3;
+        {
+            uint8_t sub = np >= 1 ? cd->param_fifo[0] : 0;
+            if (sub == 0x20) { // Get CD controller version/date
+                uint8_t r[4] = { 0x94, 0x09, 0x19, 0xC0 };
+                cd_queue(cd, 0, CD_DELAY_FAST, 3, r, 4);
+            } else {
+                cd_queue_stat(cd, 0, CD_DELAY_FAST, 3);
+            }
             break;
-        case 0x1A: // GetID
-            push_response(cd, cd->status);
-            push_response(cd, 0x00);
-            push_response(cd, 0x20); // Licensed PlayStation Disk
-            push_response(cd, 0x00);
-            push_response(cd, 'S');
-            push_response(cd, 'C');
-            push_response(cd, 'E');
-            push_response(cd, 'A');
-            cd->irq_flag = 3;
+        }
+        case 0x1A: // GetID: INT3(stat), then INT2 with disc type / region
+        {
+            cd_queue_stat(cd, 0, CD_DELAY_FAST, 3);
+            if (cd->image_file) {
+                uint8_t r[8] = { cd->status, 0x00, 0x20, 0x00, 'S', 'C', 'E', 'A' };
+                cd_queue(cd, 1, 33000, 2, r, 8);
+            } else {
+                uint8_t r[8] = { (uint8_t)(cd->status | CD_STAT_ID_ERROR), 0x40, 0x00, 0x00, 0, 0, 0, 0 };
+                cd_queue(cd, 1, 33000, 5, r, 8);
+            }
+            break;
+        }
+        case 0x1E: // ReadTOC
+            cd_queue_stat(cd, 0, CD_DELAY_FAST, 3);
+            cd_queue_stat(cd, 1, 1000000, 2);
             break;
         default:
-            push_response(cd, cd->status);
-            cd->irq_flag = 3;
+            PS1_LOG(1, "[CDROM] Unknown command 0x%02X\n", cmd);
+            cd_error(cd, 0x40); // Invalid command
             break;
     }
     cd->param_count = 0;
-    ps1_trigger_irq(ctx, IRQ_CDROM);
+}
+
+// Reads the next sector from the image into the controller's sector buffer.
+// Returns false if the sector must be dropped (XA audio, read error).
+static bool cd_fetch_sector(PS1CDROM* cd) {
+    if (!cd->image_file) return false;
+    bool wide = (cd->mode & 0x20) != 0; // 0x924 bytes (from after sync) vs 0x800
+    uint32_t off = cd->is_raw ? (wide ? 12 : 24) : 0;
+    uint32_t len = wide ? (cd->is_raw ? 2340 : 2048) : CDROM_SECTOR_SIZE_DATA;
+
+    if (cd->is_raw && (cd->mode & 0x40)) {
+        // XA-ADPCM enabled: audio sectors (submode bit 2) go to the decoder, not the host
+        uint8_t sub[8];
+        fseek(cd->image_file, (long)cd->current_lba * cd->sector_size + 16, SEEK_SET);
+        if (fread(sub, 1, 8, cd->image_file) == 8 && (sub[2] & 0x04)) return false;
+    }
+
+    fseek(cd->image_file, (long)cd->current_lba * cd->sector_size + off, SEEK_SET);
+    size_t r = fread(cd->sector_buf, 1, len, cd->image_file);
+    if (r == 0) return false;
+    cd->sector_len = (int)r;
+    return true;
 }
 
 void ps1_cdrom_tick(PS1Context* ctx, uint32_t cycles) {
     PS1CDROM* cd = &ctx->cdrom;
 
-    // Handle asynchronous completion INT2 for commands like Pause, Stop, Seek, Init
-    if (cd->pending_int2) {
-        if (cd->irq_flag == 0) { // Only deliver after INT3 has been acknowledged
-            if (cd->int2_delay_cycles > cycles) {
-                cd->int2_delay_cycles -= cycles;
-            } else {
-                cd->int2_delay_cycles = 0;
-                cd->pending_int2 = false;
-                cd->seeking = false;
-                cd->status &= ~CD_STAT_SEEK_BIT;
-                cd->response_count = 0;
-                cd->response_read_pos = 0;
-                push_response(cd, cd->status);
-                cd->irq_flag = 2; // INT2: Complete
-                ps1_trigger_irq(ctx, IRQ_CDROM);
-            }
+    // Command responses. Only one interrupt can be pending: a response waits
+    // until the previous one has been acknowledged.
+    CDEvent* e0 = &cd->ev[0];
+    CDEvent* e1 = &cd->ev[1];
+    if (e0->valid) {
+        e0->delay = e0->delay > cycles ? e0->delay - cycles : 0;
+        if (e0->delay == 0 && cd->irq_flag == 0) {
+            cd_post(ctx, e0);
+            cd->busy = false;
+        }
+    }
+    if (!e0->valid && e1->valid) {
+        e1->delay = e1->delay > cycles ? e1->delay - cycles : 0;
+        if (e1->delay == 0 && cd->irq_flag == 0) {
+            cd_post(ctx, e1);
         }
     }
 
+    // Sector stream
     if (cd->reading && cd->image_file) {
-        // Do not interrupt while previous IRQ (e.g. INT3 acknowledge) is still unhandled
-        if (cd->irq_flag != 0) {
-            return;
-        }
-
-        // If sector was partially read by DMA/CPU, don't overwrite until finished
-        if (cd->data_bytes_avail > 0 && cd->data_read_pos > 0) {
-            return;
-        }
-
-        cd->read_cycles += cycles;
-        // Pacing for static recompilation
-        uint32_t sector_period = (cd->mode & 0x80) ? 16384 : 32768;
-
-        if (cd->read_cycles >= sector_period) {
-            cd->read_cycles -= sector_period;
-
-            // Read sector (support subheader mode 0x20)
-            bool subheader_mode = (cd->mode & 0x20) != 0;
-            uint32_t sec_offset = (cd->is_raw ? (subheader_mode ? 12 : 24) : 0);
-            uint32_t sec_size = subheader_mode ? (cd->is_raw ? 2340 : 2048) : CDROM_SECTOR_SIZE_DATA;
-            long offset = (long)cd->current_lba * cd->sector_size + sec_offset;
-            fseek(cd->image_file, offset, SEEK_SET);
-            size_t r = fread(cd->data_fifo, 1, sec_size, cd->image_file);
-            if (r > 0) {
-                cd->data_bytes_avail = (int)r;
-                cd->data_read_pos = 0;
-                cd->last_read_lba = cd->current_lba;
+        if (cd->sector_cycles > cycles) {
+            cd->sector_cycles -= cycles;
+        } else {
+            cd->sector_cycles = 0;
+            if (cd->irq_flag == 0 && !e0->valid) {
+                if (cd_fetch_sector(cd)) {
+                    cd->last_read_lba = cd->current_lba;
+                    cd->response_fifo[0] = cd->status;
+                    cd->response_count = 1;
+                    cd->response_read_pos = 0;
+                    cd->irq_flag = 1; // INT1: sector ready
+                    PS1_LOG(2, "[CDROM] Sector ready: LBA %u (len=%d, mode=0x%02X)\n", cd->current_lba, cd->sector_len, cd->mode);
+                    cd_update_irq(ctx);
+                }
                 cd->current_lba++;
-                cd->response_count = 0;
-                cd->response_read_pos = 0;
-                push_response(cd, cd->status);
-                cd->irq_flag = 1; // Sector data ready IRQ (INT1)
-                PS1_LOG(2, "[CDROM] Sector Delivered: LBA %u (avail=%d, mode=0x%02X)\n", cd->last_read_lba, cd->data_bytes_avail, cd->mode);
-                ps1_trigger_irq(ctx, IRQ_CDROM);
+                cd->sector_cycles = cd_sector_period(cd);
             }
         }
     }
@@ -306,10 +411,12 @@ uint8_t ps1_cdrom_read(PS1Context* ctx, uint32_t addr) {
 
     switch (reg) {
         case 0: // Status Register
-            ret = cd->reg_index | (cd->param_count == 0 ? (1 << 3) : 0) |
-                   (cd->param_count < 16 ? (1 << 4) : 0) |
-                   (cd->response_count > cd->response_read_pos ? (1 << 5) : 0) |
-                   (cd->data_bytes_avail > 0 ? (1 << 6) : 0);
+            ret = cd->reg_index |
+                  (cd->param_count == 0 ? (1 << 3) : 0) |        // PRMEMPT
+                  (cd->param_count < 16 ? (1 << 4) : 0) |        // PRMWRDY
+                  (cd->response_count > cd->response_read_pos ? (1 << 5) : 0) | // RSLRRDY
+                  (cd->data_bytes_avail > 0 ? (1 << 6) : 0) |    // DRQSTS
+                  (cd->busy ? (1 << 7) : 0);                     // BUSYSTS
             break;
         case 1: // Response FIFO
             if (cd->response_read_pos < cd->response_count) {
@@ -322,7 +429,7 @@ uint8_t ps1_cdrom_read(PS1Context* ctx, uint32_t addr) {
                 ret = cd->data_fifo[cd->data_read_pos++];
             }
             break;
-        case 3: // 0x1F801803: Index 0/2 = Interrupt Enable, Index 1/3 = Interrupt Flag
+        case 3: // Index 0/2 = Interrupt Enable, Index 1/3 = Interrupt Flag
             if (cd->reg_index & 1) {
                 ret = 0xE0 | (cd->irq_flag & 0x1F);
             } else {
@@ -344,38 +451,38 @@ void ps1_cdrom_write(PS1Context* ctx, uint32_t addr, uint8_t val) {
             break;
         case 1:
             if (cd->reg_index == 0) {
-                if (val == 0x02) {
-                    PS1_LOG(2, "[CDROM Setloc Caller] PC=0x%08X, RA=0x%08X, SP=0x%08X, A0=0x%08X, A1=0x%08X\n",
-                           ctx->cpu.pc, ctx->cpu.r[31], ctx->cpu.r[29], ctx->cpu.r[4], ctx->cpu.r[5]);
+                if (cd->busy) {
+                    PS1_LOG(1, "[CDROM] Command 0x%02X written while busy: ignored\n", val);
+                } else {
+                    handle_cdrom_command(ctx, val);
                 }
-                handle_cdrom_command(ctx, val);
-            } else if (cd->reg_index == 3) {
-                // Audio volume setting
             }
             break;
         case 2:
-            if (cd->reg_index == 0 && cd->param_count < 16) {
-                cd->param_fifo[cd->param_count++] = val;
-            } else if (cd->reg_index == 1 || cd->reg_index == 3) {
-                // Interrupt Enable Register (0x1F801802.1 / 0x1F801802.3)
+            if (cd->reg_index == 0) {
+                if (cd->param_count < 16) cd->param_fifo[cd->param_count++] = val;
+            } else if (cd->reg_index == 1) {
                 cd->irq_enable = val & 0x1F;
+                cd_update_irq(ctx); // A flag that is already pending may now be visible
             }
             break;
         case 3:
             if (cd->reg_index == 0) {
-                // Request register (0x1F801803.0): Bit 7 = BFRD (Want Data)
+                // Request register: bit 7 (BFRD) loads the sector buffer into the data FIFO,
+                // clearing it resets the FIFO
                 if (val & 0x80) {
-                    cd->data_read_pos = 0;
-                    if (cd->data_bytes_avail == 0) {
-                        cd->data_bytes_avail = (cd->mode & 0x20) ? (cd->is_raw ? 2340 : 2048) : CDROM_SECTOR_SIZE_DATA;
+                    if (cd->data_bytes_avail == 0 && cd->sector_len > 0) {
+                        memcpy(cd->data_fifo, cd->sector_buf, cd->sector_len);
+                        cd->data_bytes_avail = cd->sector_len;
+                        cd->data_read_pos = 0;
                     }
+                } else {
+                    cd->data_bytes_avail = 0;
+                    cd->data_read_pos = 0;
                 }
-            } else if (cd->reg_index == 1 || cd->reg_index == 3) {
-                // Acknowledge IRQ bits (0x1F801803.1 / 0x1F801803.3)
+            } else if (cd->reg_index == 1) {
                 cd->irq_flag &= ~(val & 0x1F);
-                if (val & 0x40) {
-                    cd->param_count = 0; // Reset parameter FIFO
-                }
+                if (val & 0x40) cd->param_count = 0; // CLRPRM
             }
             break;
     }

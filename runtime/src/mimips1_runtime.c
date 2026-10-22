@@ -74,6 +74,7 @@ void ps1_runtime_reset(PS1Context* ctx) {
     ctx->start_time_ns = 0;
     ctx->in_tick = false;
     ctx->irq_depth = 0;
+    ctx->irq_in_queue = false;
     ctx->last_sched_cycle = 0;
     ctx->next_vblank_cycle = PS1_VBLANK_PERIOD;
 }
@@ -222,7 +223,7 @@ static void irq_deliver_bit(PS1Context* ctx, uint32_t bit) {
 #define IRQ_MAX_DEPTH 3
 
 void ps1_irq_poll(PS1Context* ctx) {
-    if (ctx->irq_depth >= IRQ_MAX_DEPTH) return;
+    if (ctx->irq_depth >= IRQ_MAX_DEPTH || ctx->irq_in_queue) return;
     irq_update_cause(ctx);
 
     uint32_t sr = ctx->cpu.cop0[COP0_SR];
@@ -237,6 +238,7 @@ void ps1_irq_poll(PS1Context* ctx) {
 
         // SysEnqIntRP dispatch queues (C0:02). These inspect and acknowledge
         // I_STAT themselves, so they run before the bits are cleared.
+        ctx->irq_in_queue = true;
         for (int p = 0; p < 4; p++) {
             uint32_t cur = ctx->bios.intrp_heads[p];
             while (cur != 0) {
@@ -246,6 +248,7 @@ void ps1_irq_poll(PS1Context* ctx) {
                 cur = next;
             }
         }
+        ctx->irq_in_queue = false;
 
         // Kernel-style acknowledge, then per-source callbacks
         ctx->irq_stat &= ~pending;
@@ -282,6 +285,7 @@ static void scheduler_run(PS1Context* ctx) {
 
     ps1_timers_tick(ctx, delta);
     ps1_cdrom_tick(ctx, delta);
+    ps1_input_tick(ctx, delta);
 #if defined(__APPLE__)
     macos_audio_tick(ctx, delta);
 #endif

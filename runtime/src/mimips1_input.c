@@ -1,4 +1,5 @@
 #include "mimips1_input.h"
+#include "mimips1_runtime.h"
 #include <string.h>
 
 void ps1_input_init(PS1Input* input) {
@@ -58,6 +59,7 @@ static uint8_t exchange_byte(PS1Input* input, uint8_t tx) {
                 input->pad_state = 1;
                 rx = 0xFF;
             }
+            // 0x81 (memory card) and anything else: no device answers, so no ACK
             break;
         case 1:
             if (tx == 0x42) { // Poll
@@ -101,9 +103,14 @@ static uint8_t exchange_byte(PS1Input* input, uint8_t tx) {
     return rx;
 }
 
+// A byte takes ~8 bit times at the programmed baud rate; the pad then pulses /ACK
+// on every byte except the last of a transaction.
+#define SIO_BYTE_CYCLES 1400
+
 uint16_t ps1_input_read16(PS1Input* input, uint32_t addr) {
     uint32_t reg = addr & 0x0F;
-    if (reg == 0x00) { // RX Data
+    if (reg == 0x00) { // RX Data (reading pops the FIFO)
+        input->stat &= ~0x0002;
         return input->rx_data;
     } else if (reg == 0x04) { // STAT
         return input->stat;
@@ -120,17 +127,48 @@ uint16_t ps1_input_read16(PS1Input* input, uint32_t addr) {
 void ps1_input_write16(PS1Input* input, uint32_t addr, uint16_t val) {
     uint32_t reg = addr & 0x0F;
     if (reg == 0x00) { // TX Data
+        if (!(input->ctrl & 0x0001)) return; // TXEN off
         input->tx_data = (uint8_t)val;
         input->rx_data = exchange_byte(input, input->tx_data);
-        input->stat |= 0x0002; // RX Data Ready
+        input->xfer_ack = (input->pad_state != 0);
+        input->xfer_busy = true;
+        input->xfer_cycles = SIO_BYTE_CYCLES;
+        input->stat &= ~(0x0001 | 0x0004 | 0x0080); // TX busy, DSR released
     } else if (reg == 0x08) {
         input->mode = val;
     } else if (reg == 0x0A) {
-        input->ctrl = val;
+        input->ctrl = val & ~0x0050; // Bits 4 (ACK) and 6 (RESET) are commands, not stored
+        if (val & (1 << 4)) { // Acknowledge: clears IRQ and error flags
+            input->stat &= ~(0x0008 | 0x0010 | 0x0020 | 0x0200);
+        }
         if (val & (1 << 6)) { // Reset
+            input->pad_state = 0;
+            input->xfer_busy = false;
+            input->stat = 0x0005;
+            input->ctrl = 0;
+            input->mode = 0;
+        }
+        if (!(val & 0x0002)) { // DTR released: deselects the device
             input->pad_state = 0;
         }
     } else if (reg == 0x0E) {
         input->baud = val;
+    }
+}
+
+void ps1_input_tick(PS1Context* ctx, uint32_t cycles) {
+    PS1Input* in = &ctx->input;
+    if (!in->xfer_busy) return;
+    if (in->xfer_cycles > cycles) {
+        in->xfer_cycles -= cycles;
+        return;
+    }
+    in->xfer_busy = false;
+    in->stat |= 0x0001 | 0x0004 | 0x0002;   // TX ready, RX byte available
+    if (in->xfer_ack) {
+        in->stat |= 0x0080 | 0x0200;        // DSR (/ACK) and IRQ flag
+        if (in->ctrl & (1 << 12)) {         // DSR interrupt enable
+            ps1_trigger_irq(ctx, IRQ_CONTROLLER);
+        }
     }
 }

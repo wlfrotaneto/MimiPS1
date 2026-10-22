@@ -21,6 +21,15 @@ typedef enum {
     CD_STAT_PLAY_BIT   = (1 << 7)
 } CDStatusBits;
 
+// A response scheduled for delivery after `delay` cycles
+typedef struct {
+    bool     valid;
+    uint32_t delay;
+    uint8_t  type;      // INT number (2 = complete, 3 = acknowledge, 5 = error)
+    uint8_t  len;
+    uint8_t  data[16];
+} CDEvent;
+
 struct PS1CDROM {
     FILE*    image_file;
     char     image_path[512];
@@ -59,9 +68,15 @@ struct PS1CDROM {
 
     uint32_t irq_flag;
     uint32_t irq_enable;
-    uint32_t read_cycles;
-    bool     pending_int2;
-    uint32_t int2_delay_cycles;
+
+    bool     busy;              // Status bit 7: command in flight until its first response is posted
+    CDEvent  ev[2];             // [0] first response, [1] second response
+    bool     setloc_pending;
+    uint32_t seek_lba;
+    uint32_t sector_cycles;     // Countdown to the next sector while reading
+    uint8_t  sector_buf[CDROM_SECTOR_SIZE_RAW]; // Latest sector, copied to data_fifo on BFRD
+    int      sector_len;
+    uint8_t  filter_file, filter_channel;
 };
 
 void     ps1_cdrom_init(PS1CDROM* cdrom);
