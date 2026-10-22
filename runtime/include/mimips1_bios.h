@@ -38,6 +38,7 @@ struct PS1BIOS {
     uint32_t    heap_base;
     uint32_t    heap_size;
     uint32_t    heap_cur;
+    bool        heap_ready;     // Heap block list written into guest RAM
     
     // File descriptors (for cdrom: and bu00:)
     PS1OpenFile files[16];

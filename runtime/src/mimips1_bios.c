@@ -66,6 +66,75 @@ static inline uint8_t to_bcd(uint8_t val) {
     return ((val / 10) << 4) | (val % 10);
 }
 
+// -------------------------------------------------------------
+// Kernel heap (malloc/free/calloc/realloc): first-fit with coalescing.
+// Each block starts with an 8-byte header in guest RAM: [total size][used flag].
+// -------------------------------------------------------------
+#define HEAP_HDR 8u
+
+static void heap_init(PS1Context* ctx) {
+    uint32_t base = (ctx->bios.heap_base + 7) & ~7u;
+    uint32_t size = ctx->bios.heap_size & ~7u;
+    ctx->bios.heap_ready = true;
+    if (size < HEAP_HDR * 2 || !get_host_ptr(ctx, base)) { ctx->bios.heap_size = 0; return; }
+    ps1_mem_write32(ctx, base, size);
+    ps1_mem_write32(ctx, base + 4, 0);
+}
+
+static uint32_t heap_alloc(PS1Context* ctx, uint32_t bytes) {
+    if (!ctx->bios.heap_ready) heap_init(ctx);
+    uint32_t need = ((bytes + 7) & ~7u) + HEAP_HDR;
+    uint32_t cur = (ctx->bios.heap_base + 7) & ~7u;
+    uint32_t end = cur + (ctx->bios.heap_size & ~7u);
+    while (cur + HEAP_HDR <= end) {
+        uint32_t bsize = ps1_mem_read32(ctx, cur);
+        uint32_t used = ps1_mem_read32(ctx, cur + 4);
+        if (bsize < HEAP_HDR || cur + bsize > end) break; // corrupted block list
+        if (!used && bsize >= need) {
+            if (bsize - need >= HEAP_HDR + 8) { // split
+                ps1_mem_write32(ctx, cur + need, bsize - need);
+                ps1_mem_write32(ctx, cur + need + 4, 0);
+                bsize = need;
+            }
+            ps1_mem_write32(ctx, cur, bsize);
+            ps1_mem_write32(ctx, cur + 4, 1);
+            return cur + HEAP_HDR;
+        }
+        cur += bsize;
+    }
+    return 0;
+}
+
+static void heap_free(PS1Context* ctx, uint32_t ptr) {
+    if (!ctx->bios.heap_ready || ptr < HEAP_HDR) return;
+    uint32_t blk = ptr - HEAP_HDR;
+    uint32_t base = (ctx->bios.heap_base + 7) & ~7u;
+    uint32_t end = base + (ctx->bios.heap_size & ~7u);
+    if (blk < base || blk + HEAP_HDR > end) return;
+    ps1_mem_write32(ctx, blk + 4, 0);
+    // Coalesce every run of free blocks (linear walk keeps the logic trivial and robust)
+    uint32_t cur = base;
+    while (cur + HEAP_HDR <= end) {
+        uint32_t bsize = ps1_mem_read32(ctx, cur);
+        if (bsize < HEAP_HDR || cur + bsize > end) break;
+        if (!ps1_mem_read32(ctx, cur + 4)) {
+            uint32_t nxt = cur + bsize;
+            while (nxt + HEAP_HDR <= end && !ps1_mem_read32(ctx, nxt + 4)) {
+                uint32_t nsize = ps1_mem_read32(ctx, nxt);
+                if (nsize < HEAP_HDR || nxt + nsize > end) break;
+                bsize += nsize;
+                nxt += nsize;
+            }
+            ps1_mem_write32(ctx, cur, bsize);
+        }
+        cur += bsize;
+    }
+}
+
+static uint32_t heap_block_payload(PS1Context* ctx, uint32_t ptr) {
+    return ptr >= HEAP_HDR ? ps1_mem_read32(ctx, ptr - HEAP_HDR) - HEAP_HDR : 0;
+}
+
 static bool do_cd_search_file(PS1Context* ctx) {
     uint32_t* r = ctx->cpu.r;
     uint32_t fp_addr = r[4];
@@ -433,6 +502,7 @@ bool ps1_bios_handle_a0(PS1Context* ctx, uint32_t func) {
                 const void* s2 = get_host_ptr(ctx, r[5]);
                 r[2] = (s1 && s2) ? (uint32_t)memcmp(s1, s2, r[6]) : 0;
             }
+            return true;
         case 0x2E: // memchr(s, c, n)
             {
                 const void* s = get_host_ptr(ctx, r[4]);
@@ -448,40 +518,47 @@ bool ps1_bios_handle_a0(PS1Context* ctx, uint32_t func) {
             r[2] = 0;
             return true;
         case 0x33: // malloc(size)
-            {
-                uint32_t size = (r[4] + 3) & ~3;
-                uint32_t ptr = ctx->bios.heap_cur;
-                ctx->bios.heap_cur += size;
-                r[2] = ptr;
-            }
+            r[2] = heap_alloc(ctx, r[4]);
             return true;
         case 0x34: // free(ptr)
+            heap_free(ctx, r[4]);
             r[2] = 0;
             return true;
         case 0x37: // calloc(num, size)
             {
-                uint32_t total = (r[4] * r[5] + 3) & ~3;
-                uint32_t ptr = ctx->bios.heap_cur;
-                ctx->bios.heap_cur += total;
-                void* host_ptr = get_host_ptr(ctx, ptr);
+                uint32_t total = r[4] * r[5];
+                uint32_t ptr = heap_alloc(ctx, total);
+                void* host_ptr = ptr ? get_host_ptr(ctx, ptr) : NULL;
                 if (host_ptr) memset(host_ptr, 0, total);
                 r[2] = ptr;
             }
             return true;
         case 0x38: // realloc(ptr, size)
             {
-                uint32_t size = (r[5] + 3) & ~3;
-                uint32_t new_ptr = ctx->bios.heap_cur;
-                ctx->bios.heap_cur += size;
-                void* old_h = get_host_ptr(ctx, r[4]);
-                void* new_h = get_host_ptr(ctx, new_ptr);
-                if (old_h && new_h && size > 0) memcpy(new_h, old_h, size);
-                r[2] = new_ptr;
+                uint32_t old = r[4], size = r[5];
+                uint32_t nptr = heap_alloc(ctx, size);
+                if (nptr && old) {
+                    uint32_t keep = heap_block_payload(ctx, old);
+                    if (keep > size) keep = size;
+                    void* oh = get_host_ptr(ctx, old);
+                    void* nh = get_host_ptr(ctx, nptr);
+                    if (oh && nh) memmove(nh, oh, keep);
+                    heap_free(ctx, old);
+                }
+                r[2] = nptr;
             }
             return true;
-        case 0x39: // InitCARD(pad_enable)
-        case 0x3C: // _bu_init()
+        case 0x39: // InitHeap(addr, size)
+            ctx->bios.heap_base = r[4];
+            ctx->bios.heap_size = r[5];
+            ctx->bios.heap_cur = r[4];
+            ctx->bios.heap_ready = false;
+            PS1_LOG(1, "[BIOS A0:39] InitHeap(0x%08X, 0x%X)\n", r[4], r[5]);
             r[2] = 0;
+            return true;
+        case 0x3C: // putchar(c)
+            putchar((char)(r[4] & 0xFF));
+            r[2] = r[4];
             return true;
         case 0x3A: // StartCARD()
         case 0x3B: // StopCARD()
@@ -727,11 +804,14 @@ bool ps1_bios_handle_b0(PS1Context* ctx, uint32_t func) {
             fflush(stdout);
             r[2] = r[4];
             return true;
-        case 0x3E: // std_out_puts(s)
+        case 0x3E: // std_in_gets(buf): no console input
+            r[2] = 0;
+            return true;
+        case 0x3F: // std_out_puts(s)
             {
-                const char* s = (const char*)get_host_ptr(ctx, r[4]);
-                if (s) {
-                    printf("%s\n", s);
+                const char* str = (const char*)get_host_ptr(ctx, r[4]);
+                if (str) {
+                    printf("%s\n", str);
                     fflush(stdout);
                 }
                 r[2] = 0;
@@ -769,12 +849,6 @@ bool ps1_bios_handle_b0(PS1Context* ctx, uint32_t func) {
             return true;
         case 0x36: // close(fd)
             r[2] = (uint32_t)bios_file_close(ctx, r[4]);
-            return true;
-        case 0x3F: // InitHeap(addr, size)
-            ctx->bios.heap_base = r[4];
-            ctx->bios.heap_size = r[5];
-            ctx->bios.heap_cur = r[4];
-            r[2] = ctx->bios.heap_base;
             return true;
         case 0x42: // firstfile(filename, dirent)
             {

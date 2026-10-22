@@ -98,6 +98,13 @@ int main(int argc, char** argv) {
         }
     }
 
+    // With the official BIOS present, boot through it (it loads the game from the disc and
+    // provides the real kernel). MIMIPS1_HLE=1 forces the built-in HLE kernel.
+    if (ctx->memory.has_bios && !getenv("MIMIPS1_HLE") && ctx->cdrom.image_file) {
+        ps1_runtime_boot_bios(ctx);
+        printf("[MimiPS1] Booting through the real BIOS\n");
+    }
+
     printf("[MimiPS1] Launching native Apple Silicon Metal window...\n");
     int result = run_native_macos_app(ctx, app_name);
 

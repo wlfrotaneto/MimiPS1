@@ -46,7 +46,12 @@ struct PS1CPU {
     uint64_t total_cycles;  // Cycles executed
     uint32_t next_pc;       // Stored next PC for jumps
     bool branch_taken;      // Flag for branch resolution
-    bool is_in_delay_slot;  // Flag for exception in delay slot
+    bool is_in_delay_slot;  // The instruction at pc sits in a branch delay slot
+    uint32_t ld_reg;        // Pending (delayed) load: destination register, 0 = none
+    uint32_t ld_val;
+    bool hook_next;         // Last branch may land on a recompiled entry
+    bool hook_pending;      // pc just landed via such a branch
+    uint8_t entry_bits[PS1_RAM_SIZE / 4 / 8]; // 1 = word is the entry of a recompiled function
     
     // Fast O(1) Indirect Call Lookup Table
     PS1RecompiledFunc func_table[PS1_FUNC_TABLE_SIZE];

@@ -58,6 +58,10 @@ struct PS1Context {
     uint32_t    cycles_since_vblank;
     bool        in_tick;
     bool        in_irq;
+    bool        bios_boot;          // Real BIOS boots the game (otherwise built-in HLE kernel)
+    bool        native_enabled;     // Recompiled functions may be entered from the interpreter
+    bool        in_native;          // Currently executing recompiled code
+    int         interp_depth;
     bool        irq_in_queue;       // Running SysEnqIntRP handlers (kernel runs these with IRQs off)
     int         irq_depth;          // Nesting level of guest interrupt callbacks
     jmp_buf     irq_env;
@@ -91,6 +95,10 @@ void        ps1_runtime_reset(PS1Context* ctx);
 
 // Loading PlayStation Executable (.EXE / .BIN)
 bool        ps1_runtime_load_exe(PS1Context* ctx, const char* exe_path);
+
+// Boot through the real BIOS ROM at the reset vector / run the emulation thread
+void        ps1_runtime_boot_bios(PS1Context* ctx);
+void        ps1_runtime_run(PS1Context* ctx);
 
 // Run a single video frame (~1/60th second, ~564,480 CPU cycles)
 void        ps1_runtime_run_frame(PS1Context* ctx);

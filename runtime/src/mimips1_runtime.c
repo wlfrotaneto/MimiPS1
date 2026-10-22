@@ -6,6 +6,7 @@
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
+#include "mimips1_interp.h"
 
 int g_mimips1_log_level = -1;
 
@@ -225,8 +226,19 @@ static void irq_deliver_bit(PS1Context* ctx, uint32_t bit) {
 #define IRQ_MAX_DEPTH 3
 
 void ps1_irq_poll(PS1Context* ctx) {
-    if (ctx->irq_depth >= IRQ_MAX_DEPTH || ctx->irq_in_queue) return;
     irq_update_cause(ctx);
+    if (ctx->bios_boot) {
+        // The real kernel dispatches interrupts. The interpreter takes them itself; native
+        // code reaches here and hands the exception to the kernel at this safe point.
+        if (ctx->in_native && ctx->interp_depth < IRQ_MAX_DEPTH + 4) {
+            uint32_t sr = ctx->cpu.cop0[COP0_SR];
+            if ((sr & SR_IEc) && (ctx->cpu.cop0[COP0_CAUSE] & sr & 0x0700)) {
+                ps1_interp_interrupt_from_native(ctx);
+            }
+        }
+        return;
+    }
+    if (ctx->irq_depth >= IRQ_MAX_DEPTH || ctx->irq_in_queue) return;
 
     uint32_t sr = ctx->cpu.cop0[COP0_SR];
     if (!(sr & SR_IEc) || !(sr & (1u << 10))) return;
@@ -346,6 +358,15 @@ static void scheduler_run(PS1Context* ctx) {
         }
 
         if ((ctx->frame_count % 60) == 0) ps1_trace_report();
+        {
+            static long dump_at = -2;
+            if (dump_at == -2) { const char* e = getenv("MIMIPS1_RAMDUMP"); dump_at = e ? atol(e) : -1; }
+            if (dump_at >= 0 && (long)ctx->frame_count == dump_at) {
+                FILE* f = fopen("/tmp/ps1_ram.bin", "wb");
+                if (f) { fwrite(ctx->memory.ram, 1, PS1_RAM_SIZE, f); fclose(f); }
+                printf("[RAMDUMP] frame %ld pc=%08X ra=%08X sp=%08X\n", dump_at, ctx->cpu.pc, ctx->cpu.r[31], ctx->cpu.r[29]);
+            }
+        }
         apply_scripted_input(ctx);
         ps1_bios_update_pads(ctx);
         ps1_trigger_irq(ctx, IRQ_VBLANK);
@@ -358,8 +379,27 @@ static void scheduler_run(PS1Context* ctx) {
 // latches IRQ lines; handlers run afterwards through ps1_irq_poll(), outside
 // the scheduler, so a handler that polls a timer or status register still
 // sees time advance.
+static void check_watch(PS1Context* ctx) {
+    static uint32_t watch_addr = 0xFFFFFFFF, last = 0;
+    static int init = 0;
+    if (!init) {
+        init = 1;
+        const char* e = getenv("MIMIPS1_WATCH");
+        if (e) { watch_addr = (uint32_t)strtoul(e, NULL, 16); last = ps1_mem_read32(ctx, watch_addr); }
+    }
+    if (watch_addr == 0xFFFFFFFF) return;
+    uint32_t v = ps1_mem_read32(ctx, watch_addr);
+    if (v != last) {
+        printf("[WATCH] %08X: %08X -> %08X  pc=%08X ra=%08X (cycle %llu) lastdma=ch%d madr=%08X bcr=%08X\n", watch_addr, last, v,
+               ctx->cpu.pc, ctx->cpu.r[31], (unsigned long long)ctx->cycle_counter,
+               ctx->dma.last_channel, ctx->dma.last_madr, ctx->dma.last_bcr);
+        last = v;
+    }
+}
+
 void ps1_cpu_tick(PS1Context* ctx, uint32_t cycles) {
     if (!ctx) return;
+    check_watch(ctx);
     ctx->cycle_counter += cycles;
 
     if (ctx->cycle_counter - ctx->last_sched_cycle >= SCHED_QUANTUM_CYCLES) {
@@ -412,3 +452,29 @@ void ps1_trace_report(void) {
 #else
 void ps1_trace_report(void) {}
 #endif
+
+// Puts the CPU at the reset vector so the real BIOS boots the disc.
+void ps1_runtime_boot_bios(PS1Context* ctx) {
+    memset(ctx->memory.ram, 0, sizeof(ctx->memory.ram));
+    memset(ctx->cpu.r, 0, sizeof(ctx->cpu.r));
+    ctx->cpu.hi = ctx->cpu.lo = 0;
+    ctx->cpu.pc = 0xBFC00000u;
+    ctx->cpu.next_pc = 0xBFC00004u;
+    ctx->cpu.is_in_delay_slot = false;
+    ctx->cpu.ld_reg = 0;
+    ctx->cpu.cop0[COP0_SR] = SR_BEV;        // reset state: boot exception vectors, interrupts off
+    ctx->cpu.cop0[COP0_CAUSE] = 0;
+    ctx->bios_boot = true;
+    ctx->native_enabled = false;
+    ctx->irq_stat = 0;
+    ctx->irq_mask = 0;
+}
+
+// Entry point of the emulation thread.
+void ps1_runtime_run(PS1Context* ctx) {
+    if (ctx->bios_boot) {
+        ps1_interp_run(ctx);
+    } else if (ctx->cpu.pc != 0) {
+        ps1_call_indirect(ctx, ctx->cpu.pc);
+    }
+}

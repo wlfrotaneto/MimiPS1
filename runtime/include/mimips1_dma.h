@@ -28,6 +28,8 @@ struct PS1DMA {
     DMAChannel channels[7];
     uint32_t   dpcr; // Control Register
     uint32_t   dicr; // Interrupt Register
+    int        last_channel;   // Debug: most recent transfer
+    uint32_t   last_madr, last_bcr;
 };
 
 void     ps1_dma_init(PS1DMA* dma);

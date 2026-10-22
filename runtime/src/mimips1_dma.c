@@ -68,6 +68,9 @@ void ps1_dma_write(PS1Context* ctx, uint32_t addr, uint32_t val) {
 void ps1_dma_execute(PS1Context* ctx, int channel_idx) {
     DMAChannel* ch = &ctx->dma.channels[channel_idx];
     uint32_t sync_mode = (ch->chcr >> 9) & 0x03;
+    ctx->dma.last_channel = channel_idx;
+    ctx->dma.last_madr = ch->madr;
+    ctx->dma.last_bcr = ch->bcr;
     PS1_LOG(2, "[DMA] execute ch=%d sync=%u madr=0x%08X bcr=0x%08X chcr=0x%08X\n", channel_idx, sync_mode, ch->madr, ch->bcr, ch->chcr);
 
     // GPU DMA Channel (2)
