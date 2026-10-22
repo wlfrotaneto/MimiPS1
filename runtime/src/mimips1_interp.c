@@ -125,7 +125,7 @@ static void interp_loop(PS1Context* ctx, uint32_t stop_pc, bool check_sp, uint32
 
         if (__builtin_expect(++tick_count >= 16, 0)) {
             tick_count = 0;
-            ps1_cpu_tick(ctx, 16 * ctx->cpi);
+            ps1_cpu_tick(ctx, (16 * ctx->cpi) >> 1);
         }
 
         if (__builtin_expect(ctx->bios_boot && irq_ready(c), 0)) {

@@ -49,6 +49,7 @@ struct PS1Input {
     // Memory card transaction (81h ... on the selected port)
     void*    cards;             // PS1CardManager*, set by the runtime
     int      card_slot;
+    bool     in_card_xfer;      // the byte being exchanged belongs to a memory card transaction
     uint8_t  card_cmd;          // 'R', 'W' or 'S'
     int      card_idx;          // byte index within the transaction
     uint16_t card_frame;

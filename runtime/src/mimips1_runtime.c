@@ -48,8 +48,8 @@ PS1Context* ps1_runtime_create(void) {
     ctx->aspect_ratio = 0; // 4:3
     ctx->next_vblank_cycle = PS1_VBLANK_PERIOD;
     ctx->unthrottled = getenv("MIMIPS1_UNTHROTTLED") != NULL;
-    ctx->cpi = getenv("MIMIPS1_CPI") ? (uint32_t)atoi(getenv("MIMIPS1_CPI")) : 1;
-    if (ctx->cpi < 1) ctx->cpi = 1;
+    ctx->cpi = getenv("MIMIPS1_CPI") ? (uint32_t)(atof(getenv("MIMIPS1_CPI")) * 2.0 + 0.5) : 3;   // stored in half cycles
+    if (ctx->cpi < 2) ctx->cpi = 2;
     return ctx;
 }
 
@@ -131,6 +131,22 @@ bool ps1_runtime_load_exe(PS1Context* ctx, const char* exe_path) {
     ctx->exe_text_addr = text_addr;
     ctx->exe_text_size = text_size;
     ctx->exe_entry = init_pc;
+
+    // Per-title timing: games time out polling loops by iteration count (too fast a CPU makes them
+    // give up early) while others' fades/animations misbehave when the CPU is slower than they expect.
+    // MIMIPS1_CPI always wins.
+    if (!getenv("MIMIPS1_CPI")) {
+        static const struct { uint32_t entry, size, cpi_x2; const char* name; } profiles[] = {
+            { 0x80010DFC, 561152, 4, "Castlevania: Symphony of the Night" },   // memory card load waits ~128 polls
+            { 0x00013730, 815104, 2, "Cotton Original" },
+        };
+        for (size_t i = 0; i < sizeof(profiles) / sizeof(profiles[0]); i++) {
+            if (profiles[i].entry == init_pc && profiles[i].size == text_size) {
+                ctx->cpi = profiles[i].cpi_x2;
+                printf("[MimiPS1] Timing profile for %s: %.1f cycles/instruction\n", profiles[i].name, profiles[i].cpi_x2 / 2.0);
+            }
+        }
+    }
 
     // Keep a pristine copy of the text image: recompiled code is only valid while RAM matches it
     free(ctx->exe_shadow);

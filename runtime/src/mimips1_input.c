@@ -173,6 +173,7 @@ static uint8_t exchange_byte(PS1Input* input, uint8_t tx) {
             break;
         case 20: { // memory card transaction
             bool more;
+            input->in_card_xfer = true;
             rx = card_exchange(input, tx, &more);
             PS1_LOG(3, "[CardIO] %c i=%d tx=%02X rx=%02X\n", input->card_cmd, input->card_idx - 1, tx, rx);
             (void)more;
@@ -247,8 +248,9 @@ void ps1_input_write16(PS1Input* input, uint32_t addr, uint16_t val) {
     if (reg == 0x00) { // TX Data
         if (!(input->ctrl & 0x0001)) return; // TXEN off
         input->tx_data = (uint8_t)val;
+        input->in_card_xfer = false;
         input->rx_data = exchange_byte(input, input->tx_data);
-        input->xfer_ack = (input->pad_state != 0);
+        input->xfer_ack = (input->pad_state != 0) || (input->in_card_xfer && getenv("MIMIPS1_CARD_LASTACK"));
         input->xfer_busy = true;
         input->xfer_cycles = SIO_BYTE_CYCLES;
         input->stat &= ~(0x0001 | 0x0004 | 0x0080); // TX busy, DSR released

@@ -276,7 +276,7 @@ bool mips_emit_c_code(const MipsProgram* prog, const EmitterOptions* opts) {
             // through their first label are accounted in full)
             for (int i = 0; i < normal_insns; i++) {
                 fprintf(fc, "loc_%08x:\n    PS1_STEP(0x%08X);\n", blk->insns[i].pc, blk->insns[i].pc);
-                if (i == 0) fprintf(fc, "    ctx->cycle_counter += %d * ctx->cpi;\n", n);
+                if (i == 0) fprintf(fc, "    ctx->cycle_counter += (%d * ctx->cpi) >> 1;\n", n);
                 emit_instruction_c(fc, &blk->insns[i]);
             }
 
@@ -285,7 +285,7 @@ bool mips_emit_c_code(const MipsProgram* prog, const EmitterOptions* opts) {
                 const MipsInsn* ds = &blk->insns[n - 1];
 
                 fprintf(fc, "loc_%08x:\n    PS1_STEP(0x%08X);\n", br->pc, br->pc);
-                if (normal_insns == 0) fprintf(fc, "    ctx->cycle_counter += %d * ctx->cpi;\n", n);
+                if (normal_insns == 0) fprintf(fc, "    ctx->cycle_counter += (%d * ctx->cpi) >> 1;\n", n);
 
                 // Conditional branches
                 if (br->is_branch) {
