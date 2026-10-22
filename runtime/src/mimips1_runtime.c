@@ -41,6 +41,7 @@ PS1Context* ps1_runtime_create(void) {
     ps1_input_init(&ctx->input);
     ps1_card_init(&ctx->card_mgr);
     ps1_card_auto_setup(&ctx->card_mgr);
+    ctx->input.cards = &ctx->card_mgr;
 
     ctx->running = true;
     ctx->native_enabled = true;   // HLE mode runs recompiled code from the start; BIOS boot validates first
@@ -74,6 +75,7 @@ void ps1_runtime_reset(PS1Context* ctx) {
     ps1_input_reset(&ctx->input);
     ps1_card_reset(&ctx->card_mgr);
     ps1_card_auto_setup(&ctx->card_mgr);
+    ctx->input.cards = &ctx->card_mgr;
     ctx->irq_stat = 0;
     ctx->irq_mask = 0;
     ctx->frame_count = 0;

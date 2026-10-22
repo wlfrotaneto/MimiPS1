@@ -83,8 +83,8 @@ Following the modern wave of static recompilation architectures (such as *N64Rec
   * Native 60 FPS synchronization aligned to macOS display refresh cycles (ProMotion ready).
 
 * **CoreAudio SPU Synthesis (`runtime/src/platform/macos_audio.m` & `runtime/src/mimips1_spu.c`):**
-  * 24-channel audio synthesizer with low-latency `AudioQueue` streaming.
-  * ADPCM voice decoding and mixer buffering without third-party audio abstractions.
+  * 24-channel SPU: ADPCM decoding with Catmull-Rom interpolation, hardware ADSR (linear/exponential rates), pitch modulation, noise, ENDX, mute/enable, low-latency `AudioQueue` streaming.
+  * XA-ADPCM (4-bit mono/stereo, 37.8/18.9 kHz) decoded by the CD controller and resampled into the mix. Reverb is not implemented yet.
 
 * **CD-ROM & DMA Controller (`runtime/src/mimips1_cdrom.c` & `runtime/src/mimips1_dma.c`):**
   * Dual-format sector engine handling standard 2048-byte ISO sectors and raw 2352-byte disc images (Mode 2 Form 1).
@@ -217,9 +217,9 @@ open "build/Crash Bandicoot.app"
 | Title / Target | Serial | Boot | Status |
 | :--- | :--- | :---: | :--- |
 | **Triangle Demo (Homebrew)** | N/A | HLE | **Playable** |
-| **Crash Bandicoot** | `SCUS-94900` | Real BIOS | **Boots through logos, title screen (jungle backdrop included) and attract-mode gameplay.** No audio yet |
-| **Cotton Original** | `SLPM-86461` | Real BIOS | **Reaches the title screen** with full art. No audio yet |
-| **Castlevania: Symphony of the Night** | `SLUS-00067` | Real BIOS | Boots into the Konami-logo FMV and stays there: the game's custom CD stream ISR never reports the end of the movie (open issue). No audio yet |
+| **Crash Bandicoot** | `SCUS-94900` | Real BIOS | **Logos (with the dog), title with menu, island map, level loading and gameplay.** Memory card detected (empty). SPU audio |
+| **Cotton Original** | `SLPM-86461` | Real BIOS | **Title screen, attract-mode gameplay and rankings.** SPU audio |
+| **Castlevania: Symphony of the Night** | `SLUS-00067` | Real BIOS | **Opening FMV (24-bit, with XA audio), title, file select, name entry and the opening scene.** |
 
 --- | :--- | :---: | :---: | :---: | :--- |
 | **Triangle Demo (Homebrew)** | N/A | ✅ Clean | ✅ Metal 60 FPS | N/A | **Fully Playable** |
@@ -269,10 +269,12 @@ open "build/Crash Bandicoot.app"
 - [x] macOS `.app` bundle builder & compressed UDZO `.dmg` packaging
 
 ### Active Research & Debugging
-- [ ] Castlevania: end-of-movie detection in the custom CD streaming ISR (`0x8001C8xx`), ring index `0x80097960` never wraps
-- [ ] SPU: ADSR envelopes, reverb, IRQ; XA-ADPCM decoding (currently XA sectors are only filtered)
-- [ ] Memory card over SIO0 (`0x81` device); BIOS currently sees no card
-- [ ] Metal presenter: 24-bit display mode (GP1 `08` bit 4)
+- [x] Castlevania FMV streaming (byte-wide DICR/DMA register accesses)
+- [x] SPU ADSR / interpolation / noise / pitch modulation; XA-ADPCM decoding
+- [x] Memory card over SIO0 (`0x81`: read / write / get-ID), flushed to `~/Library/Application Support/MimiPS1/memcards/`
+- [x] Metal presenter: 24-bit display mode (FMV)
+- [x] Recompiler: delay-slot labels shared with jump targets, hand-built `$ra`, per-instruction cycle accounting
+- [ ] SPU reverb and IRQ
 - [ ] Software rasterizer speed / mask bit / dithering / texture-window accuracy
 - [ ] Analog joystick mapping and rumble haptics via GameController framework
 
@@ -285,6 +287,9 @@ open "build/Crash Bandicoot.app"
 | `MIMIPS1_CD_SPEEDUP=N` | Shorten CD seek/transfer times |
 | `MIMIPS1_INPUT="start@300+8"` | Scripted pad input (button@frame+duration) |
 | `MIMIPS1_DUMP_FRAMES / _EVERY / _FROM` | Dump VRAM to `/tmp/vram_frame_N.ppm` (`tools/vram2png.py` crops/converts) |
+| `MIMIPS1_AUDIO_STATS=1` | Once a second: output peak, active voices, XA frames queued |
+| `MIMIPS1_PRESENT_DUMP=<n>` / `MIMIPS1_PRESENT_EVERY=<k>` | Write the frame the Metal presenter actually shows to `/tmp/present*.ppm` |
+| `MIMIPS1_CPI=<n>` | Cycles per instruction (default 1) |
 | `MIMIPS1_NONATIVE=1` | Run everything in the interpreter (reference behaviour for comparing with recompiled code) |
 | `MIMIPS1_NATIVE_RANGE=lo-hi` | Hex address range of functions allowed to run natively (bisect native-code bugs) |
 | `PS1_VERIFY=1 tools/fast_rebuild.sh ...` + `MIMIPS1_VERIFY=<frame>`, `_EVERY`, `_FN`, `MIMIPS1_STEP_FN` | Differential checker: sampled native calls are re-run in the interpreter and compared; `STEP_FN` writes per-instruction traces to `/tmp/step_*.txt` |

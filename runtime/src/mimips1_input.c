@@ -1,10 +1,12 @@
 #include "mimips1_input.h"
 #include "mimips1_runtime.h"
+#include "mimips1_card.h"
 #include <string.h>
 
 void ps1_input_init(PS1Input* input) {
     memset(input, 0, sizeof(PS1Input));
     input->stat = 0x0005; // TX Ready / RX FIFO empty
+    input->card_flag = 0x08;
     for (int i = 0; i < 2; i++) {
         input->pads[i].buttons = 0xFFFF; // Active low: all released
         input->pads[i].left_stick_x = 128;
@@ -48,6 +50,77 @@ void ps1_input_set_rumble_callback(PS1Input* input, PS1RumbleCallback cb, void* 
     input->rumble_userdata = userdata;
 }
 
+// ---------------------------------------------------------------------------------------------
+// Memory card (selected with 81h instead of 01h)
+
+static uint8_t card_exchange(PS1Input* in, uint8_t tx, bool* more) {
+    PS1CardManager* mgr = (PS1CardManager*)in->cards;
+    int slot = in->card_slot;
+    uint8_t rx = 0xFF;
+    *more = true;
+    int i = in->card_idx++;
+
+    if (i == 0) { // command byte
+        in->card_cmd = tx;
+        if (tx != 'R' && tx != 'W' && tx != 'S') { in->pad_state = 0; *more = false; return 0xFF; }
+        return in->card_flag;
+    }
+    switch (in->card_cmd) {
+    case 'S': // Get ID
+        {
+            static const uint8_t id[] = { 0x5A, 0x5D, 0x5C, 0x5D, 0x04, 0x00, 0x00, 0x80 };
+            if (i - 1 < (int)sizeof(id)) rx = id[i - 1];
+            if (i - 1 >= (int)sizeof(id) - 1) { in->pad_state = 0; *more = false; }
+            return rx;
+        }
+    case 'R':
+        if (i == 1) return 0x5A;
+        if (i == 2) return 0x5D;
+        if (i == 3) { in->card_frame = (uint16_t)(tx << 8); return 0x00; }
+        if (i == 4) {
+            in->card_frame |= tx;
+            in->card_chk = (uint8_t)(in->card_frame >> 8) ^ (uint8_t)in->card_frame;
+            if (in->card_frame >= PS1_CARD_NUM_FRAMES) { in->pad_state = 0; *more = false; return (uint8_t)(in->card_frame >> 8); }
+            memset(in->card_buf, 0, sizeof(in->card_buf));
+            ps1_card_read_frame(mgr, slot, in->card_frame, in->card_buf);
+            return (uint8_t)(in->card_frame >> 8);
+        }
+        if (i == 5) return 0x5C;
+        if (i == 6) return 0x5D;
+        if (i == 7) return (uint8_t)(in->card_frame >> 8);
+        if (i == 8) return (uint8_t)in->card_frame;
+        if (i < 9 + 128) { uint8_t b = in->card_buf[i - 9]; in->card_chk ^= b; return b; }
+        if (i == 9 + 128) return in->card_chk;
+        in->pad_state = 0; *more = false;
+        return 'G';
+    case 'W':
+        if (i == 1) return 0x5A;
+        if (i == 2) return 0x5D;
+        if (i == 3) { in->card_frame = (uint16_t)(tx << 8); return 0x00; }
+        if (i == 4) { in->card_frame |= tx; in->card_chk = (uint8_t)(in->card_frame >> 8) ^ (uint8_t)in->card_frame; return (uint8_t)(in->card_frame >> 8); }
+        if (i < 5 + 128) { in->card_buf[i - 5] = tx; in->card_chk ^= tx; return in->card_prev_tx; }
+        if (i == 5 + 128) { in->card_rx_chk = tx; return in->card_prev_tx; }   // received checksum
+        if (i == 6 + 128) return 0x5C;
+        if (i == 7 + 128) return 0x5D;
+        {
+            uint8_t status = 'G';
+            if (in->card_frame >= PS1_CARD_NUM_FRAMES) status = 0xFF;
+            else if (in->card_rx_chk != in->card_chk) status = 'N';
+            else {
+                PS1_LOG(2, "[Card] write frame %u\n", in->card_frame);
+                ps1_card_write_frame(mgr, slot, in->card_frame, in->card_buf);
+                in->card_flag = 0x00;
+                in->card_pending_save = true;
+                in->card_idle_cycles = 0;
+            }
+            in->pad_state = 0; *more = false;
+            return status;
+        }
+    }
+    in->pad_state = 0; *more = false;
+    return rx;
+}
+
 static uint8_t exchange_byte(PS1Input* input, uint8_t tx) {
     uint8_t rx = 0xFF;
     int pad_idx = (input->ctrl & (1 << 13)) ? 1 : 0;
@@ -59,8 +132,25 @@ static uint8_t exchange_byte(PS1Input* input, uint8_t tx) {
                 input->pad_state = 1;
                 rx = 0xFF;
             }
-            // 0x81 (memory card) and anything else: no device answers, so no ACK
+            else if (tx == 0x81) { // Memory card
+                PS1CardManager* mgr = (PS1CardManager*)input->cards;
+                if (mgr && mgr->cards[pad_idx].loaded) {
+                    PS1_LOG(3, "[Card] port %d selected\n", pad_idx);
+                    input->pad_state = 20;
+                    input->card_slot = pad_idx;
+                    input->card_idx = 0;
+                    rx = 0xFF;
+                }
+            }
+            // anything else: no device answers, so no ACK
             break;
+        case 20: { // memory card transaction
+            bool more;
+            rx = card_exchange(input, tx, &more);
+            (void)more;
+            input->card_prev_tx = tx;
+            break;
+        }
         case 1:
             if (tx == 0x42) { // Poll
                 input->pad_state = 2;
@@ -158,6 +248,13 @@ void ps1_input_write16(PS1Input* input, uint32_t addr, uint16_t val) {
 
 void ps1_input_tick(PS1Context* ctx, uint32_t cycles) {
     PS1Input* in = &ctx->input;
+    if (in->card_pending_save) {
+        in->card_idle_cycles += cycles;
+        if (in->card_idle_cycles > PS1_CPU_CLOCK_HZ) { // a second without writes: flush to disk
+            in->card_pending_save = false;
+            ps1_card_save(&ctx->card_mgr, in->card_slot);
+        }
+    }
     if (!in->xfer_busy) return;
     if (in->xfer_cycles > cycles) {
         in->xfer_cycles -= cycles;

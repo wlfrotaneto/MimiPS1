@@ -39,6 +39,20 @@ struct PS1Input {
     bool     xfer_ack;          // Device pulses /ACK at the end of this byte
     uint32_t xfer_cycles;
 
+    // Memory card transaction (81h ... on the selected port)
+    void*    cards;             // PS1CardManager*, set by the runtime
+    int      card_slot;
+    uint8_t  card_cmd;          // 'R', 'W' or 'S'
+    int      card_idx;          // byte index within the transaction
+    uint16_t card_frame;
+    uint8_t  card_buf[128];
+    uint8_t  card_chk;
+    uint8_t  card_flag;         // 0x08 until the first write since power on
+    uint8_t  card_prev_tx;      // previous byte sent by the host (echoed during writes)
+    uint8_t  card_rx_chk;
+    uint64_t card_idle_cycles;  // since the last write; the image is flushed to disk once idle
+    bool     card_pending_save;
+
     PS1RumbleCallback rumble_cb;
     void*             rumble_userdata;
 };
