@@ -388,8 +388,19 @@ static void cd_decode_xa(PS1CDROM* cd, const uint8_t* raw) {
 int ps1_cdrom_read_xa_samples(PS1CDROM* cd, int16_t* out, int num_samples) {
     int produced = 0;
     uint32_t step = cd->xa_rate ? (uint32_t)(((uint64_t)cd->xa_rate << 16) / 44100) : 0;
+    // Sectors arrive in ~53 ms bursts, so keep a cushion: start playing once it is filled, and nudge the
+    // playback rate (+-2 %) to hold the fill near the target instead of letting it drain or overflow
+    const int32_t XA_PRIME = 4096, XA_TARGET = 6144;
+    int32_t fill = (int32_t)(cd->xa_write - cd->xa_read);
+    if (!cd->xa_primed && fill >= XA_PRIME) cd->xa_primed = true;
+    if (fill < 2) cd->xa_primed = false;
+    if (step) {
+        float err = (float)(fill - XA_TARGET) / (float)XA_TARGET;
+        if (err > 1.0f) err = 1.0f; else if (err < -1.0f) err = -1.0f;
+        step = (uint32_t)((float)step * (1.0f + 0.02f * err));
+    }
     for (int n = 0; n < num_samples; n++) {
-        bool have = step && (cd->xa_write - cd->xa_read >= 2);
+        bool have = step && cd->xa_primed && (cd->xa_write - cd->xa_read >= 2);
         if (have) {
             uint32_t i0 = cd->xa_read & (XA_RING_FRAMES - 1), i1 = (cd->xa_read + 1) & (XA_RING_FRAMES - 1);
             for (int c = 0; c < 2; c++) {
@@ -400,6 +411,7 @@ int ps1_cdrom_read_xa_samples(PS1CDROM* cd, int16_t* out, int num_samples) {
             while (cd->xa_frac >= 0x10000) { cd->xa_frac -= 0x10000; cd->xa_read++; }
             cd->xa_gain += 1.0f / 64.0f; if (cd->xa_gain > 1.0f) cd->xa_gain = 1.0f;
         } else {
+            if (cd->xa_write - cd->xa_read < 2) cd->xa_primed = false;
             cd->xa_gain -= 1.0f / 64.0f; if (cd->xa_gain < 0.0f) cd->xa_gain = 0.0f;
             if (cd->xa_gain == 0.0f) { cd->xa_last[0] = cd->xa_last[1] = 0; break; }
         }

@@ -86,6 +86,7 @@ struct PS1CDROM {
     uint32_t xa_frac;               // 16.16 position between two source frames
     int16_t  xa_old[2], xa_older[2];
     int16_t  xa_last[2];            // last frame handed out (held and faded while the stream is starved)
+    bool     xa_primed;             // enough audio queued to start playing
     float    xa_gain;               // 0..1 ramp that hides starts and gaps
 };
 
