@@ -45,6 +45,9 @@ struct PS1Input {
     uint32_t vblank_count;
     uint32_t press_at[2][16];
     uint16_t release_pending[2];
+    uint16_t phys[2];           // physical (unstretched) button state
+    uint16_t queued[2];         // a tap waiting for the previous one to finish
+    uint32_t gap_until[2][16];
 
     // Memory card transaction (81h ... on the selected port)
     void*    cards;             // PS1CardManager*, set by the runtime

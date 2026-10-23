@@ -28,25 +28,52 @@ static uint32_t min_press_frames(void) {   // MIMIPS1_MINPRESS=<frames> override
     return (uint32_t)v;
 }
 #define MIN_PRESS_FRAMES min_press_frames()
+static uint32_t min_gap_frames(void) {     // MIMIPS1_MINGAP=<frames> overrides (debug aid)
+    static int v = -1;
+    if (v < 0) { const char* e = getenv("MIMIPS1_MINGAP"); v = e ? atoi(e) : 6; }
+    return (uint32_t)v;
+}
+#define MIN_GAP_FRAMES min_gap_frames()   // released frames between two taps so the game sees two separate presses
 
 static int btn_index(PS1Button btn) {
     for (int i = 0; i < 16; i++) if ((uint16_t)btn == (1u << i)) return i;
     return -1;
 }
 
+// Keyboard taps are shorter than a game's menu polling, so every press is stretched to a minimum
+// length and a tap that arrives while the previous one is still held (or in its release gap) is queued.
+static void press_now(PS1Input* in, int p, int bi) {
+    uint16_t bit = (uint16_t)(1u << bi);
+    in->pads[p].buttons &= ~bit;
+    in->press_at[p][bi] = in->vblank_count;
+    in->queued[p] &= ~bit;
+    if (!(in->phys[p] & bit)) in->release_pending[p] |= bit;   // already let go: release after the minimum
+}
+
+static void release_now(PS1Input* in, int p, int bi) {
+    uint16_t bit = (uint16_t)(1u << bi);
+    in->pads[p].buttons |= bit;
+    in->release_pending[p] &= ~bit;
+    in->gap_until[p][bi] = in->vblank_count + MIN_GAP_FRAMES;
+}
+
 void ps1_input_set_button(PS1Input* input, int pad_idx, PS1Button btn, bool pressed) {
     if (pad_idx < 0 || pad_idx > 1) return;
     int bi = btn_index(btn);
+    if (bi < 0) return;
+    uint16_t bit = (uint16_t)btn;
+    bool down = !(input->pads[pad_idx].buttons & bit);
     if (pressed) {
-        if (bi >= 0 && (input->pads[pad_idx].buttons & (uint16_t)btn)) input->press_at[pad_idx][bi] = input->vblank_count; // newly down
-        if (bi >= 0) input->release_pending[pad_idx] &= ~(uint16_t)btn;
-        input->pads[pad_idx].buttons &= ~(uint16_t)btn; // Active low
-    } else if (!(input->pads[pad_idx].buttons & (uint16_t)btn)) {          // currently down
-        if (bi >= 0 && input->vblank_count - input->press_at[pad_idx][bi] < MIN_PRESS_FRAMES) {
-            input->release_pending[pad_idx] |= (uint16_t)btn;               // too short: release later
-        } else {
-            input->pads[pad_idx].buttons |= (uint16_t)btn;
-        }
+        bool fresh = !(input->phys[pad_idx] & bit);          // key auto-repeat does not count as a new tap
+        input->phys[pad_idx] |= bit;
+        if (!fresh) return;
+        if (down || input->vblank_count < input->gap_until[pad_idx][bi]) input->queued[pad_idx] |= bit;
+        else press_now(input, pad_idx, bi);
+    } else {
+        input->phys[pad_idx] &= ~bit;
+        if (!down) return;
+        if (input->vblank_count - input->press_at[pad_idx][bi] < MIN_PRESS_FRAMES) input->release_pending[pad_idx] |= bit;
+        else release_now(input, pad_idx, bi);
     }
 }
 
@@ -55,10 +82,11 @@ void ps1_input_vblank(PS1Input* input) {
     for (int p = 0; p < 2; p++) {
         for (int i = 0; i < 16; i++) {
             uint16_t bit = (uint16_t)(1u << i);
-            if ((input->release_pending[p] & bit) && input->vblank_count - input->press_at[p][i] >= MIN_PRESS_FRAMES) {
-                input->release_pending[p] &= ~bit;
-                input->pads[p].buttons |= bit;
-            }
+            bool down = !(input->pads[p].buttons & bit);
+            if (down && (input->release_pending[p] & bit) && input->vblank_count - input->press_at[p][i] >= MIN_PRESS_FRAMES)
+                release_now(input, p, i);
+            else if (!down && (input->queued[p] & bit) && input->vblank_count >= input->gap_until[p][i])
+                press_now(input, p, i);
         }
     }
 }
