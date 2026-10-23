@@ -83,6 +83,7 @@ struct PS1GPU {
 
     // Display Area
     int16_t  disp_x, disp_y;
+    uint32_t flips;                 // display buffer swaps (MIMIPS1_FRAMESTATS)
     int16_t  disp_w, disp_h;
     int16_t  disp_y1, disp_y2;
     bool     disp_enable;

@@ -746,6 +746,7 @@ void ps1_gpu_write_gp1(PS1GPU* gpu, uint32_t val) {
             }
             break;
         case 0x05: // Display Start
+            if (gpu->disp_x != (int16_t)(val & 0x3FE) || gpu->disp_y != (int16_t)((val >> 10) & 0x1FF)) gpu->flips++;
             gpu->disp_x = (int16_t)(val & 0x3FE); // 2-pixel aligned in hardware
             gpu->disp_y = (int16_t)((val >> 10) & 0x1FF);
             break;

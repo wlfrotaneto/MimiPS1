@@ -290,6 +290,9 @@ open "build/Crash Bandicoot.app"
 | `MIMIPS1_INPUT="start@300+8"` | Scripted pad input (button@frame+duration) |
 | `MIMIPS1_DUMP_FRAMES / _EVERY / _FROM` | Dump VRAM to `/tmp/vram_frame_N.ppm` (`tools/vram2png.py` crops/converts) |
 | `MIMIPS1_AUDIO_STATS=1` | Once a second: output peak, active voices, XA frames queued |
+| `MIMIPS1_FRAMESTATS=1` | Once a second: frames that missed the 60 Hz deadline, display buffer swaps, unacknowledged vblanks |
+| `MIMIPS1_PADLOG=1` | One line per controller poll (video frame, port, button bits) |
+| `MIMIPS1_MINPRESS=<n>` | Minimum frames a button stays down (default 8; short taps are stretched) |
 | `MIMIPS1_PRESENT_DUMP=<n>` / `MIMIPS1_PRESENT_EVERY=<k>` | Write the frame the Metal presenter actually shows to `/tmp/present*.ppm` |
 | `MIMIPS1_CPI=<n>` | Average cycles per instruction (default 1.0, may be fractional; games time out polling loops by iteration count) |
 | `MIMIPS1_NONATIVE=1` | Run everything in the interpreter (reference behaviour for comparing with recompiled code) |

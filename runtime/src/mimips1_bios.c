@@ -1004,6 +1004,7 @@ bool ps1_bios_handle_syscall(PS1Context* ctx) {
 
 void ps1_bios_update_pads(PS1Context* ctx) {
     if (!ctx || !ctx->bios.pad_active) return;
+    { static int off = -1; if (off < 0) off = getenv("MIMIPS1_NOHLEPAD") != NULL; if (off) return; }
 
     if (ctx->bios.pad_button_dest != 0) {
         uint16_t b0 = ctx->input.pads[0].buttons;

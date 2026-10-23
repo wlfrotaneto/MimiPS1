@@ -2,6 +2,8 @@
 #include "mimips1_runtime.h"
 #include "mimips1_card.h"
 #include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 void ps1_input_init(PS1Input* input) {
     memset(input, 0, sizeof(PS1Input));
@@ -20,7 +22,12 @@ void ps1_input_reset(PS1Input* input) {
     ps1_input_init(input);
 }
 
-#define MIN_PRESS_FRAMES 3
+static uint32_t min_press_frames(void) {   // MIMIPS1_MINPRESS=<frames> overrides (debug aid)
+    static int v = -1;
+    if (v < 0) { const char* e = getenv("MIMIPS1_MINPRESS"); v = e ? atoi(e) : 8; }
+    return (uint32_t)v;
+}
+#define MIN_PRESS_FRAMES min_press_frames()
 
 static int btn_index(PS1Button btn) {
     for (int i = 0; i < 16; i++) if ((uint16_t)btn == (1u << i)) return i;
@@ -195,6 +202,10 @@ static uint8_t exchange_byte(PS1Input* input, uint8_t tx) {
             break;
         case 3:
             rx = (uint8_t)(p->buttons & 0xFF); // Buttons low byte
+            {   // MIMIPS1_PADLOG=1: one line per pad poll (video frame, port, buttons)
+                static int on = -1; if (on < 0) on = getenv("MIMIPS1_PADLOG") != NULL;
+                if (on) printf("[Pad] v=%u port=%d btn=%04X\n", input->vblank_count, pad_idx, p->buttons);
+            }
             if (p->is_analog) {
                 p->rumble_small = (tx == 0x01) ? 1 : 0;
             }

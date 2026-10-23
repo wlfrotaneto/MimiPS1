@@ -49,7 +49,7 @@ PS1Context* ps1_runtime_create(void) {
     ctx->next_vblank_cycle = PS1_VBLANK_PERIOD;
     ctx->unthrottled = getenv("MIMIPS1_UNTHROTTLED") != NULL;
     ctx->cpi = getenv("MIMIPS1_CPI") ? (uint32_t)(atof(getenv("MIMIPS1_CPI")) * 2.0 + 0.5) : 2;   // stored in half cycles
-    if (ctx->cpi < 2) ctx->cpi = 2;
+    if (ctx->cpi < 1) ctx->cpi = 1;
     ctx->cpi_base = ctx->cpi;
     return ctx;
 }
@@ -172,7 +172,10 @@ static inline void irq_update_cause(PS1Context* ctx) {
     }
 }
 
+uint32_t g_vblank_overruns;   // vblanks raised while the previous one was still unacknowledged (MIMIPS1_FRAMESTATS)
+
 void ps1_trigger_irq(PS1Context* ctx, uint32_t irq_bit) {
+    if (irq_bit == IRQ_VBLANK && (ctx->irq_stat & irq_bit)) g_vblank_overruns++;
     ctx->irq_stat |= irq_bit;
     irq_update_cause(ctx);
 }
@@ -323,6 +326,19 @@ static void pace_frame(PS1Context* ctx) {
     if (ctx->start_time_ns == 0) ctx->start_time_ns = now - ctx->frame_count * PS1_FRAME_NS;
 
     uint64_t target = ctx->start_time_ns + ctx->frame_count * PS1_FRAME_NS;
+    {   // MIMIPS1_FRAMESTATS=1: once per second, how many frames missed their deadline and by how much
+        static int on = -1, late = 0, n = 0; static uint64_t worst = 0, lastp = 0;
+        if (on < 0) on = getenv("MIMIPS1_FRAMESTATS") != NULL;
+        if (on) {
+            n++;
+            if (now > target + 1000000ULL) { late++; if (now - target > worst) worst = now - target; }
+            if (now - lastp > 1000000000ULL) {
+                printf("[Frames] %d frames, %d late (worst %.1f ms), %u buffer swaps, %u vblanks unacknowledged\n", n, late, worst / 1e6, ctx->gpu.flips, g_vblank_overruns);
+                ctx->gpu.flips = 0; g_vblank_overruns = 0;
+                n = late = 0; worst = 0; lastp = now;
+            }
+        }
+    }
     if (now < target) {
         struct timespec ts = { 0, (long)(target - now) };
         nanosleep(&ts, NULL);
@@ -367,9 +383,14 @@ static void apply_scripted_input(PS1Context* ctx) {
             }
         }
     }
-    for (int i = 0; i < nsteps; i++) {
-        bool down = ctx->frame_count >= steps[i].from && ctx->frame_count < steps[i].to;
-        ps1_input_set_button(&ctx->input, 0, steps[i].btn, down);
+    for (int i = 0; i < nsteps; i++) {   // one call per button: several steps may share a button
+        bool first = true, down = false;
+        for (int j = 0; j < nsteps; j++) {
+            if (steps[j].btn != steps[i].btn) continue;
+            if (j < i) first = false;
+            if (ctx->frame_count >= steps[j].from && ctx->frame_count < steps[j].to) down = true;
+        }
+        if (first) ps1_input_set_button(&ctx->input, 0, steps[i].btn, down);
     }
     PS1_LOG(2, "[PAD] frame=%llu buttons=%04X active=%d dest=%08X mem=%08X\n", (unsigned long long)ctx->frame_count, ctx->input.pads[0].buttons, ctx->bios.pad_active, ctx->bios.pad_button_dest, ctx->bios.pad_button_dest ? ps1_mem_read32(ctx, ctx->bios.pad_button_dest) : 0);
 }
