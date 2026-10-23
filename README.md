@@ -217,7 +217,9 @@ Every recompiled game gets a **Settings** menu in the macOS menu bar:
 | Volume slider, Mute (⌥⌘M) | Master output volume, remembered between runs |
 | Player 1 / Player 2 Controller | Pick Automatic, the Keyboard, any connected gamepad, or None for each PS1 port |
 | Keyboard Mapping… | Click a PS1 button, press the key you want; a key can only drive one button, Reset to Defaults restores the layout below |
-| CRT Scanlines (⌘S), Smooth Scaling, Full Screen (⌘F) | Video options |
+| Scaling Filter | Nearest (hard pixels), Bilinear (smooth) or Sharp Bilinear (default: crisp pixels with soft edges at any window size) |
+| Anti-Aliasing (FXAA) | Edge smoothing pass on the scaled image; hides the stair-steps of polygon edges on large monitors |
+| CRT Scanlines (⌘S), Full Screen (⌘F) | Video options |
 | Show Memory Card Files, Erase Memory Card 1/2… | Opens the save folder in Finder; formats a card (asks first) |
 
 Default keyboard layout: arrows = D-pad, Z/X/A/S = ✕/○/□/△, Q/W/E/R = L1/R1/L2/R2, C/V = L3/R3, Return = Start, Space = Select.
@@ -306,6 +308,8 @@ Default keyboard layout: arrows = D-pad, Z/X/A/S = ✕/○/□/△, Q/W/E/R = L1
 | `MIMIPS1_FRAMESTATS=1` | Once a second: frames that missed the 60 Hz deadline, display buffer swaps, unacknowledged vblanks |
 | `MIMIPS1_PADLOG=1` | One line per controller poll (video frame, port, button bits) |
 | `MIMIPS1_MINPRESS=<n>` | Minimum frames a button stays down (default 8; short taps are stretched) |
+| `MIMIPS1_SCALING=<0..2>` / `MIMIPS1_FXAA=<0\|1>` | Override the scaling filter / FXAA saved in Settings |
+| `MIMIPS1_RENDER_DUMP=<n>` | Write the n-th drawn frame, exactly as the window shows it, to `/tmp/render.ppm` (use a small n: macOS stops drawing hidden windows) |
 | `MIMIPS1_MINGAP=<n>` | Frames a button stays up between two taps (default 6; a fast second tap is queued) |
 | `MIMIPS1_RXLOG=1` | Log every SIO0 transmit, receive and status read (controller / memory card protocol) |
 | `MIMIPS1_ACKCYC=<n>` | Cycles the /ACK line stays asserted after a byte (default 300) |

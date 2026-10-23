@@ -13,7 +13,8 @@ extern void macos_audio_shutdown(void);
 
 @interface MimiPS1ViewDelegate : NSObject <MTKViewDelegate>
 - (instancetype)initWithContext:(PS1Context*)ctx device:(id<MTLDevice>)device;
-@property (nonatomic, assign) BOOL smoothFiltering;
+@property (nonatomic, assign) int scalingMode;       // 0 nearest, 1 bilinear, 2 sharp bilinear
+@property (nonatomic, assign) BOOL fxaa;
 @end
 
 extern volatile float g_ps1_master_volume;
@@ -431,7 +432,8 @@ static void macos_rumble_callback(int pad_idx, uint8_t small_motor, uint8_t larg
 @property (nonatomic, strong) NSSlider* volumeSlider;
 @property (nonatomic, strong) NSMenuItem* muteItem;
 @property (nonatomic, strong) NSMenuItem* scanlinesItem;
-@property (nonatomic, strong) NSMenuItem* smoothItem;
+@property (nonatomic, strong) NSArray<NSMenuItem*>* scalingItems;
+@property (nonatomic, strong) NSMenuItem* fxaaItem;
 @property (nonatomic, strong) NSMenu* player1Menu;
 @property (nonatomic, strong) NSMenu* player2Menu;
 @property (nonatomic, strong) MimiPS1KeyPanel* keyPanel;
@@ -449,7 +451,8 @@ static void macos_rumble_callback(int pad_idx, uint8_t small_motor, uint8_t larg
     g_ps1_master_volume = [d objectForKey:@"MimiPS1.volume"] ? [d floatForKey:@"MimiPS1.volume"] : 1.0f;
     g_ps1_muted = [d boolForKey:@"MimiPS1.muted"];
     self.context->crt_scanlines = [d boolForKey:@"MimiPS1.scanlines"];
-    self.windowController.viewDelegate.smoothFiltering = [d boolForKey:@"MimiPS1.smooth"];
+    self.windowController.viewDelegate.scalingMode = [d objectForKey:@"MimiPS1.scaling"] ? (int)[d integerForKey:@"MimiPS1.scaling"] : 2;
+    self.windowController.viewDelegate.fxaa = [d boolForKey:@"MimiPS1.fxaa"];
 }
 
 - (void)volumeChanged:(NSSlider*)sender {
@@ -469,10 +472,15 @@ static void macos_rumble_callback(int pad_idx, uint8_t small_motor, uint8_t larg
     [[NSUserDefaults standardUserDefaults] setBool:self.context->crt_scanlines forKey:@"MimiPS1.scanlines"];
 }
 
-- (void)toggleSmooth:(id)sender {
-    BOOL v = !self.windowController.viewDelegate.smoothFiltering;
-    self.windowController.viewDelegate.smoothFiltering = v;
-    [[NSUserDefaults standardUserDefaults] setBool:v forKey:@"MimiPS1.smooth"];
+- (void)chooseScaling:(NSMenuItem*)item {
+    self.windowController.viewDelegate.scalingMode = (int)item.tag;
+    [[NSUserDefaults standardUserDefaults] setInteger:item.tag forKey:@"MimiPS1.scaling"];
+}
+
+- (void)toggleFxaa:(id)sender {
+    BOOL v = !self.windowController.viewDelegate.fxaa;
+    self.windowController.viewDelegate.fxaa = v;
+    [[NSUserDefaults standardUserDefaults] setBool:v forKey:@"MimiPS1.fxaa"];
 }
 
 - (void)toggleFullScreen:(id)sender { [self.window toggleFullScreen:nil]; }
@@ -572,7 +580,8 @@ static void macos_rumble_callback(int pad_idx, uint8_t small_motor, uint8_t larg
 - (BOOL)validateMenuItem:(NSMenuItem*)item {
     if (item == self.muteItem) item.state = g_ps1_muted ? NSControlStateValueOn : NSControlStateValueOff;
     else if (item == self.scanlinesItem) item.state = self.context->crt_scanlines ? NSControlStateValueOn : NSControlStateValueOff;
-    else if (item == self.smoothItem) item.state = self.windowController.viewDelegate.smoothFiltering ? NSControlStateValueOn : NSControlStateValueOff;
+    else if (item == self.fxaaItem) item.state = self.windowController.viewDelegate.fxaa ? NSControlStateValueOn : NSControlStateValueOff;
+    else if ([self.scalingItems containsObject:item]) item.state = (item.tag == self.windowController.viewDelegate.scalingMode) ? NSControlStateValueOn : NSControlStateValueOff;
     return YES;
 }
 
@@ -633,8 +642,18 @@ static void macos_rumble_callback(int pad_idx, uint8_t small_motor, uint8_t larg
     // Video
     self.scanlinesItem = [menu addItemWithTitle:@"CRT Scanlines" action:@selector(toggleScanlines:) keyEquivalent:@"s"];
     self.scanlinesItem.target = self;
-    self.smoothItem = [menu addItemWithTitle:@"Smooth Scaling" action:@selector(toggleSmooth:) keyEquivalent:@""];
-    self.smoothItem.target = self;
+    NSMenuItem* scalingRoot = [menu addItemWithTitle:@"Scaling Filter" action:nil keyEquivalent:@""];
+    NSMenu* scalingMenu = [[NSMenu alloc] initWithTitle:@"Scaling Filter"];
+    NSMutableArray* sitems = [NSMutableArray array];
+    NSArray* names = @[@"Nearest (sharp pixels)", @"Bilinear (smooth)", @"Sharp Bilinear"];
+    for (NSInteger i = 0; i < 3; i++) {
+        NSMenuItem* it = [scalingMenu addItemWithTitle:names[i] action:@selector(chooseScaling:) keyEquivalent:@""];
+        it.target = self; it.tag = i; [sitems addObject:it];
+    }
+    self.scalingItems = sitems;
+    scalingRoot.submenu = scalingMenu;
+    self.fxaaItem = [menu addItemWithTitle:@"Anti-Aliasing (FXAA)" action:@selector(toggleFxaa:) keyEquivalent:@""];
+    self.fxaaItem.target = self;
     NSMenuItem* fs = [menu addItemWithTitle:@"Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"];
     fs.target = self;
     [menu addItem:[NSMenuItem separatorItem]];
@@ -696,6 +715,7 @@ int run_native_macos_app(PS1Context* ctx, const char* window_title) {
         mtkView.colorPixelFormat = MTLPixelFormatBGRA8Unorm;
         mtkView.clearColor = MTLClearColorMake(0.0, 0.0, 0.0, 1.0);
         mtkView.preferredFramesPerSecond = 60;
+        if (getenv("MIMIPS1_RENDER_DUMP")) mtkView.framebufferOnly = NO;
 
         MimiPS1ViewDelegate* delegate = [[MimiPS1ViewDelegate alloc] initWithContext:ctx device:device];
         mtkView.delegate = delegate;
@@ -711,6 +731,8 @@ int run_native_macos_app(PS1Context* ctx, const char* window_title) {
         settings.windowController = winController;
         settings.window = window;
         [settings applyStoredSettings];
+        if (getenv("MIMIPS1_SCALING")) delegate.scalingMode = atoi(getenv("MIMIPS1_SCALING"));
+        if (getenv("MIMIPS1_FXAA")) delegate.fxaa = atoi(getenv("MIMIPS1_FXAA")) != 0;
         objc_setAssociatedObject(NSApp, "mimips1.settings", settings, OBJC_ASSOCIATION_RETAIN);   // menu items only hold weak targets
 
         // Init CoreAudio
