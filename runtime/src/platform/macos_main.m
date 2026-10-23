@@ -37,6 +37,87 @@ extern volatile bool  g_ps1_muted;
 - (void)detachController:(GCController*)controller;
 @end
 
+
+// ---------------------------------------------------------------------------------------------
+// Keyboard mapping: virtual key code -> PS1 button, editable from Settings > Keyboard Mapping…
+
+static const struct { const char* key; const char* label; PS1Button btn; int def; const char* defName; } kPadButtons[] = {
+    {"UP", "D-pad Up", PS1_BTN_UP, 126, "↑"},           {"DOWN", "D-pad Down", PS1_BTN_DOWN, 125, "↓"},
+    {"LEFT", "D-pad Left", PS1_BTN_LEFT, 123, "←"},     {"RIGHT", "D-pad Right", PS1_BTN_RIGHT, 124, "→"},
+    {"CROSS", "✕  Cross", PS1_BTN_CROSS, 6, "Z"},       {"CIRCLE", "○  Circle", PS1_BTN_CIRCLE, 7, "X"},
+    {"SQUARE", "□  Square", PS1_BTN_SQUARE, 0, "A"},    {"TRIANGLE", "△  Triangle", PS1_BTN_TRIANGLE, 1, "S"},
+    {"L1", "L1", PS1_BTN_L1, 12, "Q"},                  {"R1", "R1", PS1_BTN_R1, 13, "W"},
+    {"L2", "L2", PS1_BTN_L2, 14, "E"},                  {"R2", "R2", PS1_BTN_R2, 15, "R"},
+    {"START", "Start", PS1_BTN_START, 36, "Return"},    {"SELECT", "Select", PS1_BTN_SELECT, 49, "Space"},
+    {"L3", "L3", PS1_BTN_L3, 8, "C"},                   {"R3", "R3", PS1_BTN_R3, 9, "V"},
+};
+#define kNumPadButtons ((int)(sizeof(kPadButtons) / sizeof(kPadButtons[0])))
+
+static PS1Button g_keymap[256];                  // 0 = key unused
+
+static NSString* mimips1_special_key_name(NSEvent* ev) {
+    switch (ev.keyCode) {
+        case 126: return @"↑"; case 125: return @"↓"; case 123: return @"←"; case 124: return @"→";
+        case 36: return @"Return"; case 76: return @"Enter"; case 49: return @"Space"; case 51: return @"Delete";
+        case 48: return @"Tab"; case 56: case 60: return @"Shift"; case 59: case 62: return @"Control";
+        case 58: case 61: return @"Option"; case 57: return @"Caps Lock";
+    }
+    NSString* c = ev.charactersIgnoringModifiers.uppercaseString;
+    return c.length ? c : [NSString stringWithFormat:@"Key %d", ev.keyCode];
+}
+
+// {button key: NSNumber code} and {button key: name}; a missing entry means "default", code 0 means unbound
+static NSDictionary* mimips1_stored(NSString* name) { return [[NSUserDefaults standardUserDefaults] dictionaryForKey:name] ?: @{}; }
+
+static int mimips1_code_for(int i) {
+    NSNumber* n = mimips1_stored(@"MimiPS1.keyCodes")[@(kPadButtons[i].key)];
+    return n ? n.intValue : kPadButtons[i].def;
+}
+
+static NSString* mimips1_name_for(int i) {
+    NSNumber* n = mimips1_stored(@"MimiPS1.keyCodes")[@(kPadButtons[i].key)];
+    if (!n) return @(kPadButtons[i].defName);
+    if (n.intValue == 0) return @"—";
+    return mimips1_stored(@"MimiPS1.keyNames")[@(kPadButtons[i].key)] ?: [NSString stringWithFormat:@"Key %d", n.intValue];
+}
+
+static void mimips1_rebuild_keymap(void) {
+    memset(g_keymap, 0, sizeof(g_keymap));
+    for (int i = 0; i < kNumPadButtons; i++) {
+        int code = mimips1_code_for(i);
+        if (code > 0 && code < 256) g_keymap[code] = kPadButtons[i].btn;
+    }
+}
+
+static void mimips1_assign_key(int button, int code, NSString* name) {
+    NSMutableDictionary* codes = [mimips1_stored(@"MimiPS1.keyCodes") mutableCopy];
+    NSMutableDictionary* names = [mimips1_stored(@"MimiPS1.keyNames") mutableCopy];
+    for (int i = 0; i < kNumPadButtons; i++) {          // materialize, then take the key away from whoever had it
+        NSString* k = @(kPadButtons[i].key);
+        if (!codes[k]) { codes[k] = @(kPadButtons[i].def); names[k] = @(kPadButtons[i].defName); }
+        if (i != button && [codes[k] intValue] == code) { codes[k] = @0; }
+    }
+    codes[@(kPadButtons[button].key)] = @(code);
+    names[@(kPadButtons[button].key)] = name;
+    [[NSUserDefaults standardUserDefaults] setObject:codes forKey:@"MimiPS1.keyCodes"];
+    [[NSUserDefaults standardUserDefaults] setObject:names forKey:@"MimiPS1.keyNames"];
+    mimips1_rebuild_keymap();
+}
+
+static void mimips1_reset_keymap(void) {
+    [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"MimiPS1.keyCodes"];
+    [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"MimiPS1.keyNames"];
+    mimips1_rebuild_keymap();
+}
+
+@interface MimiPS1KeyPanel : NSPanel
+@property (nonatomic, copy) void (^onKey)(NSEvent*);
+@end
+@implementation MimiPS1KeyPanel
+- (BOOL)canBecomeKeyWindow { return YES; }
+- (void)keyDown:(NSEvent*)event { if (self.onKey) self.onKey(event); }
+@end
+
 static void macos_rumble_callback(int pad_idx, uint8_t small_motor, uint8_t large_motor, void* userdata) {
     MimiPS1WindowController* win = (__bridge MimiPS1WindowController*)userdata;
     [win handleRumblePad:pad_idx small:small_motor large:large_motor];
@@ -325,82 +406,16 @@ static void macos_rumble_callback(int pad_idx, uint8_t small_motor, uint8_t larg
             return;
         }
     }
-
-    PS1Input* input = &_context->input;
     NSInteger kport = [self padForKeyboard];
-    if (kport < 0) return;
-    int kp = (int)kport;
-    switch (event.keyCode) {
-        // D-Pad
-        case 126: ps1_input_set_button(input, kp, PS1_BTN_UP, true); break;    // Up arrow
-        case 125: ps1_input_set_button(input, kp, PS1_BTN_DOWN, true); break;  // Down arrow
-        case 123: ps1_input_set_button(input, kp, PS1_BTN_LEFT, true); break;  // Left arrow
-        case 124: ps1_input_set_button(input, kp, PS1_BTN_RIGHT, true); break; // Right arrow
-
-        // Action Buttons
-        case 6:   ps1_input_set_button(input, kp, PS1_BTN_CROSS, true); break; // Z
-        case 7:   ps1_input_set_button(input, kp, PS1_BTN_CIRCLE, true); break;// X
-        case 0:   ps1_input_set_button(input, kp, PS1_BTN_SQUARE, true); break;// A
-        case 1:   ps1_input_set_button(input, kp, PS1_BTN_TRIANGLE, true); break;// S
-
-        // Start / Select
-        case 36:  ps1_input_set_button(input, kp, PS1_BTN_START, true); break; // Enter
-        case 49:  ps1_input_set_button(input, kp, PS1_BTN_SELECT, true); break;// Space
-        case 51:  ps1_input_set_button(input, kp, PS1_BTN_SELECT, true); break;// Backspace
-
-        // Shoulders & Triggers
-        case 12:  ps1_input_set_button(input, kp, PS1_BTN_L1, true); break;    // Q
-        case 13:  ps1_input_set_button(input, kp, PS1_BTN_R1, true); break;    // W
-        case 14:  ps1_input_set_button(input, kp, PS1_BTN_L2, true); break;    // E
-        case 15:  ps1_input_set_button(input, kp, PS1_BTN_R2, true); break;    // R
-
-        // Thumbstick Buttons (L3 / R3)
-        case 8:   ps1_input_set_button(input, kp, PS1_BTN_L3, true); break;    // C
-        case 9:   ps1_input_set_button(input, kp, PS1_BTN_R3, true); break;    // V
-
-        // Toggle DualShock Analog Mode
-        case 48: // Tab
-        case 17: // T
-            input->pads[0].is_analog = !input->pads[0].is_analog;
-            NSLog(@"[Input] DualShock Analog Mode: %@", input->pads[0].is_analog ? @"ON" : @"OFF");
-            break;
-    }
+    if (kport < 0 || event.keyCode >= 256 || !g_keymap[event.keyCode]) return;
+    ps1_input_set_button(&_context->input, (int)kport, g_keymap[event.keyCode], true);
 }
 
 - (void)keyUp:(NSEvent *)event {
     if (!_context) return;
-    PS1Input* input = &_context->input;
     NSInteger kport = [self padForKeyboard];
-    if (kport < 0) return;
-    int kp = (int)kport;
-    switch (event.keyCode) {
-        // D-Pad
-        case 126: ps1_input_set_button(input, kp, PS1_BTN_UP, false); break;
-        case 125: ps1_input_set_button(input, kp, PS1_BTN_DOWN, false); break;
-        case 123: ps1_input_set_button(input, kp, PS1_BTN_LEFT, false); break;
-        case 124: ps1_input_set_button(input, kp, PS1_BTN_RIGHT, false); break;
-
-        // Action Buttons
-        case 6:   ps1_input_set_button(input, kp, PS1_BTN_CROSS, false); break;
-        case 7:   ps1_input_set_button(input, kp, PS1_BTN_CIRCLE, false); break;
-        case 0:   ps1_input_set_button(input, kp, PS1_BTN_SQUARE, false); break;
-        case 1:   ps1_input_set_button(input, kp, PS1_BTN_TRIANGLE, false); break;
-
-        // Start / Select
-        case 36:  ps1_input_set_button(input, kp, PS1_BTN_START, false); break;
-        case 49:  ps1_input_set_button(input, kp, PS1_BTN_SELECT, false); break;
-        case 51:  ps1_input_set_button(input, kp, PS1_BTN_SELECT, false); break;
-
-        // Shoulders & Triggers
-        case 12:  ps1_input_set_button(input, kp, PS1_BTN_L1, false); break;
-        case 13:  ps1_input_set_button(input, kp, PS1_BTN_R1, false); break;
-        case 14:  ps1_input_set_button(input, kp, PS1_BTN_L2, false); break;
-        case 15:  ps1_input_set_button(input, kp, PS1_BTN_R2, false); break;
-
-        // Thumbstick Buttons (L3 / R3)
-        case 8:   ps1_input_set_button(input, kp, PS1_BTN_L3, false); break;
-        case 9:   ps1_input_set_button(input, kp, PS1_BTN_R3, false); break;
-    }
+    if (kport < 0 || event.keyCode >= 256 || !g_keymap[event.keyCode]) return;
+    ps1_input_set_button(&_context->input, (int)kport, g_keymap[event.keyCode], false);
 }
 
 @end
@@ -419,6 +434,9 @@ static void macos_rumble_callback(int pad_idx, uint8_t small_motor, uint8_t larg
 @property (nonatomic, strong) NSMenuItem* smoothItem;
 @property (nonatomic, strong) NSMenu* player1Menu;
 @property (nonatomic, strong) NSMenu* player2Menu;
+@property (nonatomic, strong) MimiPS1KeyPanel* keyPanel;
+@property (nonatomic, strong) NSMutableArray<NSButton*>* keyButtons;
+@property (nonatomic, assign) int capturing;
 - (NSMenuItem*)buildMenuItem;
 - (void)applyStoredSettings;
 @end
@@ -426,6 +444,7 @@ static void macos_rumble_callback(int pad_idx, uint8_t small_motor, uint8_t larg
 @implementation MimiPS1Settings
 
 - (void)applyStoredSettings {
+    mimips1_rebuild_keymap();
     NSUserDefaults* d = [NSUserDefaults standardUserDefaults];
     g_ps1_master_volume = [d objectForKey:@"MimiPS1.volume"] ? [d floatForKey:@"MimiPS1.volume"] : 1.0f;
     g_ps1_muted = [d boolForKey:@"MimiPS1.muted"];
@@ -461,6 +480,70 @@ static void macos_rumble_callback(int pad_idx, uint8_t small_motor, uint8_t larg
 - (void)chooseSource:(NSMenuItem*)item {
     NSArray* info = item.representedObject;       // @[player (NSNumber), id]
     [self.windowController setPadSource:info[1] forPlayer:[info[0] intValue]];
+}
+
+- (void)refreshKeyButtons {
+    for (int i = 0; i < kNumPadButtons; i++) self.keyButtons[i].title = (i == self.capturing) ? @"Press a key…" : mimips1_name_for(i);
+}
+
+- (void)keyButtonClicked:(NSButton*)sender {
+    self.capturing = (int)sender.tag;
+    [self refreshKeyButtons];
+    [self.keyPanel makeKeyWindow];
+}
+
+- (void)resetKeys:(id)sender {
+    mimips1_reset_keymap();
+    self.capturing = -1;
+    [self refreshKeyButtons];
+}
+
+- (void)showKeyMapping:(id)sender {
+    if (!self.keyPanel) {
+        const CGFloat rowH = 30, colW = 250, top = 60, pad = 18;
+        int perCol = kNumPadButtons / 2;
+        NSRect frame = NSMakeRect(0, 0, colW * 2 + pad * 2, top + perCol * rowH + 56);
+        MimiPS1KeyPanel* panel = [[MimiPS1KeyPanel alloc] initWithContentRect:frame
+                                                                    styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable)
+                                                                      backing:NSBackingStoreBuffered defer:NO];
+        panel.title = @"Keyboard Mapping";
+        NSView* content = panel.contentView;
+        NSTextField* hint = [NSTextField labelWithString:@"Click a button, then press the key you want. Esc cancels."];
+        hint.frame = NSMakeRect(pad, frame.size.height - 34, frame.size.width - 2 * pad, 18);
+        [content addSubview:hint];
+        self.keyButtons = [NSMutableArray array];
+        for (int i = 0; i < kNumPadButtons; i++) {
+            int col = i / perCol, row = i % perCol;
+            CGFloat x = pad + col * colW, y = frame.size.height - top - (row + 1) * rowH;
+            NSTextField* l = [NSTextField labelWithString:@(kPadButtons[i].label)];
+            l.frame = NSMakeRect(x, y + 4, 100, 18);
+            NSButton* b = [NSButton buttonWithTitle:@"" target:self action:@selector(keyButtonClicked:)];
+            b.frame = NSMakeRect(x + 104, y, 120, 26);
+            b.bezelStyle = NSBezelStyleRounded;
+            b.refusesFirstResponder = YES;        // Space/Return must reach the panel, not press a button
+            b.tag = i;
+            [content addSubview:l]; [content addSubview:b];
+            [self.keyButtons addObject:b];
+        }
+        NSButton* reset = [NSButton buttonWithTitle:@"Reset to Defaults" target:self action:@selector(resetKeys:)];
+        reset.frame = NSMakeRect(pad, 14, 150, 28);
+        reset.refusesFirstResponder = YES;
+        [content addSubview:reset];
+        __weak MimiPS1Settings* weakSelf = self;
+        panel.onKey = ^(NSEvent* ev) {
+            MimiPS1Settings* me = weakSelf;
+            if (!me || me.capturing < 0) return;
+            if (ev.keyCode != 53 && !(ev.modifierFlags & NSEventModifierFlagCommand) && ev.keyCode < 256)
+                mimips1_assign_key(me.capturing, ev.keyCode, mimips1_special_key_name(ev));
+            me.capturing = -1;
+            [me refreshKeyButtons];
+        };
+        [panel center];
+        self.keyPanel = panel;
+    }
+    self.capturing = -1;
+    [self refreshKeyButtons];
+    [self.keyPanel makeKeyAndOrderFront:nil];
 }
 
 - (void)openCardFolder:(id)sender {
@@ -543,6 +626,8 @@ static void macos_rumble_callback(int pad_idx, uint8_t small_motor, uint8_t larg
     self.player1Menu = [[NSMenu alloc] initWithTitle:@"Player 1"]; self.player1Menu.delegate = self; p1.submenu = self.player1Menu;
     NSMenuItem* p2 = [menu addItemWithTitle:@"Player 2 Controller" action:nil keyEquivalent:@""];
     self.player2Menu = [[NSMenu alloc] initWithTitle:@"Player 2"]; self.player2Menu.delegate = self; p2.submenu = self.player2Menu;
+    NSMenuItem* km = [menu addItemWithTitle:@"Keyboard Mapping…" action:@selector(showKeyMapping:) keyEquivalent:@""];
+    km.target = self;
     [menu addItem:[NSMenuItem separatorItem]];
 
     // Video
@@ -658,6 +743,15 @@ int run_native_macos_app(PS1Context* ctx, const char* window_title) {
                 [winController setPadSource:@"keyboard" forPlayer:1]; printf("[Menu] keyboard port with P2=keyboard: %ld\n", (long)[winController padForKeyboard]);
                 [winController setPadSource:@"auto" forPlayer:0]; [winController setPadSource:@"auto" forPlayer:1]; [settings toggleScanlines:nil];
                 [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"MimiPS1.volume"];
+                mimips1_assign_key(4, 38, @"J");   // Cross -> J
+                printf("[Keys] J->%04X Z->%04X (cross=%04X)\n", g_keymap[38], g_keymap[6], PS1_BTN_CROSS);
+                mimips1_assign_key(6, 38, @"J");   // Square steals J: Cross becomes unbound
+                printf("[Keys] J->%04X (square=%04X) cross name=%s\n", g_keymap[38], PS1_BTN_SQUARE, mimips1_name_for(4).UTF8String);
+                [settings showKeyMapping:nil];
+                printf("[Keys] panel rows=%lu first=%s start=%s\n", (unsigned long)settings.keyButtons.count, settings.keyButtons[0].title.UTF8String, settings.keyButtons[12].title.UTF8String);
+                [settings.keyPanel orderOut:nil];
+                mimips1_reset_keymap();
+                printf("[Keys] after reset Z->%04X\n", g_keymap[6]);
                 fflush(stdout);
             });
         }

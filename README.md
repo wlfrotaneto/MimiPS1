@@ -216,10 +216,11 @@ Every recompiled game gets a **Settings** menu in the macOS menu bar:
 |------|--------------|
 | Volume slider, Mute (⌥⌘M) | Master output volume, remembered between runs |
 | Player 1 / Player 2 Controller | Pick Automatic, the Keyboard, any connected gamepad, or None for each PS1 port |
+| Keyboard Mapping… | Click a PS1 button, press the key you want; a key can only drive one button, Reset to Defaults restores the layout below |
 | CRT Scanlines (⌘S), Smooth Scaling, Full Screen (⌘F) | Video options |
 | Show Memory Card Files, Erase Memory Card 1/2… | Opens the save folder in Finder; formats a card (asks first) |
 
-Keyboard layout: arrows = D-pad, Z/X/A/S = ✕/○/□/△, Q/W/E/R = L1/R1/L2/R2, Enter = Start, Space/Backspace = Select.
+Default keyboard layout: arrows = D-pad, Z/X/A/S = ✕/○/□/△, Q/W/E/R = L1/R1/L2/R2, C/V = L3/R3, Return = Start, Space = Select.
 
 ---
 
