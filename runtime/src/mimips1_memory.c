@@ -150,7 +150,10 @@ static inline bool mmio_word_reg(uint32_t addr) {
     return (addr >= 0x1F801070 && addr <= 0x1F801077) || (addr >= 0x1F801080 && addr <= 0x1F8010FF);
 }
 
+uint64_t g_mmio_reads;   // MIMIPS1_FRAMESTATS
+
 uint32_t ps1_mmio_read(PS1Context* ctx, uint32_t addr, int size) {
+    g_mmio_reads++;
     ps1_cpu_tick(ctx, 32);
 
     // Byte / halfword / unaligned access to 32-bit registers (interrupt controller, DMA)

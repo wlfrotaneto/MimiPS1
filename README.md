@@ -294,6 +294,8 @@ open "build/Crash Bandicoot.app"
 | `MIMIPS1_PADLOG=1` | One line per controller poll (video frame, port, button bits) |
 | `MIMIPS1_MINPRESS=<n>` | Minimum frames a button stays down (default 8; short taps are stretched) |
 | `MIMIPS1_MINGAP=<n>` | Frames a button stays up between two taps (default 6; a fast second tap is queued) |
+| `MIMIPS1_RXLOG=1` | Log every SIO0 transmit, receive and status read (controller / memory card protocol) |
+| `MIMIPS1_ACKCYC=<n>` | Cycles the /ACK line stays asserted after a byte (default 300) |
 | `MIMIPS1_PRESENT_DUMP=<n>` / `MIMIPS1_PRESENT_EVERY=<k>` | Write the frame the Metal presenter actually shows to `/tmp/present*.ppm` |
 | `MIMIPS1_CPI=<n>` | Average cycles per instruction (default 1.0, may be fractional; games time out polling loops by iteration count) |
 | `MIMIPS1_NONATIVE=1` | Run everything in the interpreter (reference behaviour for comparing with recompiled code) |

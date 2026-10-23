@@ -269,9 +269,14 @@ static uint8_t exchange_byte(PS1Input* input, uint8_t tx) {
 uint16_t ps1_input_read16(PS1Input* input, uint32_t addr) {
     uint32_t reg = addr & 0x0F;
     if (reg == 0x00) { // RX Data (reading pops the FIFO)
+        {
+            static int on = -1; if (on < 0) on = getenv("MIMIPS1_RXLOG") != NULL;
+            if (on) printf("[Rx] v=%u val=%02X stat=%04X busy=%d\n", input->vblank_count, input->rx_data, input->stat, input->xfer_busy);
+        }
         input->stat &= ~0x0002;
         return input->rx_data;
     } else if (reg == 0x04) { // STAT
+        { static int on = -1; if (on < 0) on = getenv("MIMIPS1_RXLOG") != NULL; if (on) printf("[Stat] %04X\n", input->stat); }
         return input->stat;
     } else if (reg == 0x08) { // MODE
         return input->mode;
@@ -287,6 +292,7 @@ void ps1_input_write16(PS1Input* input, uint32_t addr, uint16_t val) {
     uint32_t reg = addr & 0x0F;
     if (reg == 0x00) { // TX Data
         if (!(input->ctrl & 0x0001)) return; // TXEN off
+        { static int on = -1; if (on < 0) on = getenv("MIMIPS1_RXLOG") != NULL; if (on) printf("[Tx] v=%u val=%02X ctrl=%04X stat=%04X\n", input->vblank_count, (uint8_t)val, input->ctrl, input->stat); }
         input->tx_data = (uint8_t)val;
         input->in_card_xfer = false;
         input->rx_data = exchange_byte(input, input->tx_data);
@@ -338,7 +344,7 @@ void ps1_input_tick(PS1Context* ctx, uint32_t cycles) {
     in->stat |= 0x0001 | 0x0004 | 0x0002;   // TX ready, RX byte available
     if (in->xfer_ack) {
         in->stat |= 0x0080 | 0x0200;        // DSR (/ACK) and IRQ flag
-        in->ack_cycles = 300;
+        { static int v = -1; if (v < 0) { const char* e = getenv("MIMIPS1_ACKCYC"); v = e ? atoi(e) : 300; } in->ack_cycles = (uint32_t)v; }
         if (in->ctrl & (1 << 12)) {         // DSR interrupt enable
             ps1_trigger_irq(ctx, IRQ_CONTROLLER);
         }

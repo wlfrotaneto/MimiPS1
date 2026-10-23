@@ -320,7 +320,9 @@ void ps1_irq_poll(PS1Context* ctx) {
 
 // Hold the emulated 59.94 Hz clock to wall-clock time (frame pacing only; it
 // never influences emulated time).
+extern uint64_t g_mmio_reads;
 static void pace_frame(PS1Context* ctx) {
+    if (getenv("MIMIPS1_FRAMESTATS") && ctx->frame_count % 60 == 0) { printf("[Mmio] %llu reads in the last second (x32 cycles)\n", (unsigned long long)g_mmio_reads); g_mmio_reads = 0; }
     if (ctx->unthrottled) return;
     uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
     if (ctx->start_time_ns == 0) ctx->start_time_ns = now - ctx->frame_count * PS1_FRAME_NS;
