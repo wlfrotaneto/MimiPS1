@@ -199,7 +199,6 @@ static uint8_t exchange_byte(PS1Input* input, uint8_t tx) {
                 if (mgr && mgr->cards[pad_idx].loaded && !getenv("MIMIPS1_NOCARD")) {
                     PS1_LOG(3, "[Card] port %d selected\n", pad_idx);
                     input->pad_state = 20;
-                    input->card_touched = true;
                     input->card_slot = pad_idx;
                     input->card_idx = 0;
                     rx = 0xFF;

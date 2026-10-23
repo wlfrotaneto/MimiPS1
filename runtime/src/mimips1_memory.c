@@ -151,9 +151,18 @@ static inline bool mmio_word_reg(uint32_t addr) {
 }
 
 uint64_t g_mmio_reads;   // MIMIPS1_FRAMESTATS
+uint32_t g_mmio_hist[4096];
+
+void ps1_mmio_hist_dump(void) {
+    for (int i = 0; i < 4096; i++) if (g_mmio_hist[i]) { printf("[MmioHist] 1F80%04X %u\n", i * 4, g_mmio_hist[i]); g_mmio_hist[i] = 0; }
+}
 
 uint32_t ps1_mmio_read(PS1Context* ctx, uint32_t addr, int size) {
     g_mmio_reads++;
+    {   // MIMIPS1_MMIOHIST=1: per-register read counts, dumped by ps1_mmio_hist_dump()
+        static int on = -1; if (on < 0) on = getenv("MIMIPS1_MMIOHIST") != NULL;
+        if (on) g_mmio_hist[(addr >> 2) & 0xFFF]++;
+    }
     ps1_cpu_tick(ctx, 32);
 
     // Byte / halfword / unaligned access to 32-bit registers (interrupt controller, DMA)

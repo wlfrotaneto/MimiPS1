@@ -275,7 +275,7 @@ open "build/Crash Bandicoot.app"
 - [x] Metal presenter: 24-bit display mode (FMV)
 - [x] Recompiler: delay-slot labels shared with jump targets, hand-built `$ra`, per-instruction cycle accounting
 - [x] SPU reverb
-- [x] Per-title timing profiles (cycles/instruction) and a fractional `MIMIPS1_CPI`
+- [x] CPU timing model: 1 cycle/instruction plus a stall for every load from RAM (the R3000A has no data cache); no per-title hacks
 - [ ] SPU IRQ
 - [ ] Software rasterizer speed / mask bit / dithering / texture-window accuracy
 - [ ] Analog joystick mapping and rumble haptics via GameController framework
@@ -297,7 +297,9 @@ open "build/Crash Bandicoot.app"
 | `MIMIPS1_RXLOG=1` | Log every SIO0 transmit, receive and status read (controller / memory card protocol) |
 | `MIMIPS1_ACKCYC=<n>` | Cycles the /ACK line stays asserted after a byte (default 300) |
 | `MIMIPS1_PRESENT_DUMP=<n>` / `MIMIPS1_PRESENT_EVERY=<k>` | Write the frame the Metal presenter actually shows to `/tmp/present*.ppm` |
-| `MIMIPS1_CPI=<n>` | Average cycles per instruction (default 1.0, may be fractional; games time out polling loops by iteration count) |
+| `MIMIPS1_CPI=<n>` | Base cycles per instruction (default 1.0, may be fractional; games time out polling loops by iteration count) |
+| `MIMIPS1_LOADCOST=<n>` | Extra cycles for a CPU load from RAM (default 4; scratchpad loads are free). Too small and libpsx `VSync` loops time out |
+| `MIMIPS1_TIMERLOG=1` / `MIMIPS1_MMIOHIST=1` | Root counter writes / per-second MMIO read histogram |
 | `MIMIPS1_NONATIVE=1` | Run everything in the interpreter (reference behaviour for comparing with recompiled code) |
 | `MIMIPS1_NATIVE_RANGE=lo-hi` | Hex address range of functions allowed to run natively (bisect native-code bugs) |
 | `PS1_VERIFY=1 tools/fast_rebuild.sh ...` + `MIMIPS1_VERIFY=<frame>`, `_EVERY`, `_FN`, `MIMIPS1_STEP_FN` | Differential checker: sampled native calls are re-run in the interpreter and compared; `STEP_FN` writes per-instruction traces to `/tmp/step_*.txt` |

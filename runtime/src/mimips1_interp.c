@@ -339,11 +339,11 @@ static void interp_loop(PS1Context* ctx, uint32_t stop_pc, bool check_sp, uint32
         }
         case 0x11: case 0x13: EXC(EXC_CPU, 0); // COP1 / COP3 do not exist
 
-        case 0x20: { uint32_t a = r[rs] + (uint32_t)simm; LD(rt, (uint32_t)(int32_t)(int8_t)ps1_mem_read8(ctx, a)); break; }   // LB
-        case 0x24: { uint32_t a = r[rs] + (uint32_t)simm; LD(rt, ps1_mem_read8(ctx, a)); break; }                              // LBU
-        case 0x21: { uint32_t a = r[rs] + (uint32_t)simm; if (a & 1) EXC(EXC_ADEL, a); LD(rt, (uint32_t)(int32_t)(int16_t)ps1_mem_read16(ctx, a)); break; } // LH
-        case 0x25: { uint32_t a = r[rs] + (uint32_t)simm; if (a & 1) EXC(EXC_ADEL, a); LD(rt, ps1_mem_read16(ctx, a)); break; }                              // LHU
-        case 0x23: { uint32_t a = r[rs] + (uint32_t)simm; if (a & 3) EXC(EXC_ADEL, a); LD(rt, ps1_mem_read32(ctx, a)); break; }                              // LW
+        case 0x20: { uint32_t a = r[rs] + (uint32_t)simm; LD(rt, (uint32_t)(int32_t)(int8_t)MEM_R8(a)); break; }   // LB
+        case 0x24: { uint32_t a = r[rs] + (uint32_t)simm; LD(rt, MEM_R8(a)); break; }                              // LBU
+        case 0x21: { uint32_t a = r[rs] + (uint32_t)simm; if (a & 1) EXC(EXC_ADEL, a); LD(rt, (uint32_t)(int32_t)(int16_t)MEM_R16(a)); break; } // LH
+        case 0x25: { uint32_t a = r[rs] + (uint32_t)simm; if (a & 1) EXC(EXC_ADEL, a); LD(rt, MEM_R16(a)); break; }                              // LHU
+        case 0x23: { uint32_t a = r[rs] + (uint32_t)simm; if (a & 3) EXC(EXC_ADEL, a); LD(rt, MEM_R32(a)); break; }                              // LW
         case 0x22: { // LWL (sees a pending load of the same register without waiting)
             uint32_t a = r[rs] + (uint32_t)simm;
             uint32_t cur = (rt == lreg) ? lval : r[rt];
@@ -361,7 +361,7 @@ static void interp_loop(PS1Context* ctx, uint32_t stop_pc, bool check_sp, uint32
         case 0x2B: { uint32_t a = r[rs] + (uint32_t)simm; if (a & 3) EXC(EXC_ADES, a); if (!(c->cop0[COP0_SR] & SR_IsC)) ps1_mem_write32(ctx, a, r[rt]); break; }   // SW
         case 0x2A: { uint32_t a = r[rs] + (uint32_t)simm; if (!(c->cop0[COP0_SR] & SR_IsC)) ps1_mem_swl(ctx, a, r[rt]); break; } // SWL
         case 0x2E: { uint32_t a = r[rs] + (uint32_t)simm; if (!(c->cop0[COP0_SR] & SR_IsC)) ps1_mem_swr(ctx, a, r[rt]); break; } // SWR
-        case 0x32: { uint32_t a = r[rs] + (uint32_t)simm; if (a & 3) EXC(EXC_ADEL, a); ps1_gte_set_data(&ctx->gte, rt, ps1_mem_read32(ctx, a)); break; } // LWC2
+        case 0x32: { uint32_t a = r[rs] + (uint32_t)simm; if (a & 3) EXC(EXC_ADEL, a); ps1_gte_set_data(&ctx->gte, rt, MEM_R32(a)); break; } // LWC2
         case 0x3A: { uint32_t a = r[rs] + (uint32_t)simm; if (a & 3) EXC(EXC_ADES, a); if (!(c->cop0[COP0_SR] & SR_IsC)) ps1_mem_write32(ctx, a, ps1_gte_get_data(&ctx->gte, rt)); break; } // SWC2
         default: EXC(EXC_RI, 0);
         }

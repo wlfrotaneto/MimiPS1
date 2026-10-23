@@ -72,8 +72,7 @@ struct PS1Context {
     uint64_t    start_time_ns;      // Wall-clock origin used only for 60 Hz frame pacing
     uint64_t    next_vblank_cycle;
     uint64_t    last_sched_cycle;   // Cycle count at which hardware was last advanced
-    uint32_t    cpi_base, cpi_boost;   // boost: slower CPU for ~10 s after a memory card access (title profile)
-    uint64_t    cpi_boost_until;
+    uint32_t    load_cost;          // extra cycles for a CPU load from RAM (no data cache on the R3000A; MIMIPS1_LOADCOST, default 4)
     uint32_t    cpi;                // average cycles per instruction x2 (MIMIPS1_CPI, default 1.0)
     bool        unthrottled;        // MIMIPS1_UNTHROTTLED=1: skip real-time frame pacing
 
@@ -140,16 +139,18 @@ uint64_t    macos_audio_get_underruns(void);
 #define HI              (ctx->cpu.hi)
 #define LO              (ctx->cpu.lo)
 
-#define MEM_R8(a)       ps1_mem_read8(ctx, (a))
-#define MEM_R16(a)      ps1_mem_read16(ctx, (a))
-#define MEM_R32(a)      ps1_mem_read32(ctx, (a))
+// CPU loads from RAM stall the pipeline (the R3000A in the PS1 has no data cache); scratchpad is free
+#define LOAD_COST(a)    ((void)(ctx->cycle_counter += ((((a) & 0x1FFFFFFFu) < 0x00800000u) ? ctx->load_cost : 0u)))
+#define MEM_R8(a)       (LOAD_COST(a), ps1_mem_read8(ctx, (a)))
+#define MEM_R16(a)      (LOAD_COST(a), ps1_mem_read16(ctx, (a)))
+#define MEM_R32(a)      (LOAD_COST(a), ps1_mem_read32(ctx, (a)))
 
 #define MEM_W8(a, v)    ps1_mem_write8(ctx, (a), (v))
 #define MEM_W16(a, v)   ps1_mem_write16(ctx, (a), (v))
 #define MEM_W32(a, v)   ps1_mem_write32(ctx, (a), (v))
 
-#define MEM_LWL(a, c)   ps1_mem_lwl(ctx, (a), (c))
-#define MEM_LWR(a, c)   ps1_mem_lwr(ctx, (a), (c))
+#define MEM_LWL(a, c)   (LOAD_COST(a), ps1_mem_lwl(ctx, (a), (c)))
+#define MEM_LWR(a, c)   (LOAD_COST(a), ps1_mem_lwr(ctx, (a), (c)))
 #define MEM_SWL(a, v)   ps1_mem_swl(ctx, (a), (v))
 #define MEM_SWR(a, v)   ps1_mem_swr(ctx, (a), (v))
 

@@ -63,7 +63,6 @@ struct PS1Input {
     uint8_t  card_rx_chk;
     uint64_t card_idle_cycles;  // since the last write; the image is flushed to disk once idle
     bool     card_pending_save;
-    bool     card_touched;      // a card was selected since the last video frame
 
     PS1RumbleCallback rumble_cb;
     void*             rumble_userdata;

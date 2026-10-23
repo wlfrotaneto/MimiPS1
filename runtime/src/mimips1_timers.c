@@ -1,6 +1,8 @@
 #include "mimips1_timers.h"
 #include "mimips1_runtime.h"
 #include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 void ps1_timers_init(PS1Timers* timers) {
     memset(timers, 0, sizeof(PS1Timers));
@@ -106,6 +108,7 @@ uint16_t ps1_timers_read(PS1Timers* timers, uint32_t addr) {
 void ps1_timers_write(PS1Timers* timers, uint32_t addr, uint16_t val) {
     int idx = (addr - 0x1F801100) / 0x10;
     int reg = (addr & 0x0F);
+    { static int on = -1; if (on < 0) on = getenv("MIMIPS1_TIMERLOG") != NULL; if (on) printf("[Timer] W t%d reg=%02X val=%04X\n", idx, reg, val); }
     if (idx < 3) {
         if (reg == 0x00) {
             timers->counters[idx].value = val;

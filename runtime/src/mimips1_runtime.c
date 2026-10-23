@@ -50,7 +50,7 @@ PS1Context* ps1_runtime_create(void) {
     ctx->unthrottled = getenv("MIMIPS1_UNTHROTTLED") != NULL;
     ctx->cpi = getenv("MIMIPS1_CPI") ? (uint32_t)(atof(getenv("MIMIPS1_CPI")) * 2.0 + 0.5) : 2;   // stored in half cycles
     if (ctx->cpi < 1) ctx->cpi = 1;
-    ctx->cpi_base = ctx->cpi;
+    ctx->load_cost = getenv("MIMIPS1_LOADCOST") ? (uint32_t)atoi(getenv("MIMIPS1_LOADCOST")) : 4;
     return ctx;
 }
 
@@ -132,23 +132,6 @@ bool ps1_runtime_load_exe(PS1Context* ctx, const char* exe_path) {
     ctx->exe_text_addr = text_addr;
     ctx->exe_text_size = text_size;
     ctx->exe_entry = init_pc;
-
-    // Per-title timing: games time out polling loops by iteration count (too fast a CPU makes them
-    // give up early) while others' fades/animations misbehave when the CPU is slower than they expect.
-    // MIMIPS1_CPI always wins.
-    if (!getenv("MIMIPS1_CPI")) {
-        static const struct { uint32_t entry, size, cpi_x2; const char* name; } profiles[] = {
-            { 0x80010DFC, 561152, 4, "Castlevania: Symphony of the Night" },   // memory card load waits ~128 polls: slow CPU only around card access
-            { 0x00013730, 815104, 2, "Cotton Original" },
-        };
-        for (size_t i = 0; i < sizeof(profiles) / sizeof(profiles[0]); i++) {
-            if (profiles[i].entry == init_pc && profiles[i].size == text_size) {
-                ctx->cpi_boost = profiles[i].cpi_x2 > ctx->cpi_base ? profiles[i].cpi_x2 : 0;
-                ctx->cpi = ctx->cpi_base;
-                printf("[MimiPS1] Timing profile for %s: %.1f cycles/instruction\n", profiles[i].name, profiles[i].cpi_x2 / 2.0);
-            }
-        }
-    }
 
     // Keep a pristine copy of the text image: recompiled code is only valid while RAM matches it
     free(ctx->exe_shadow);
@@ -321,8 +304,9 @@ void ps1_irq_poll(PS1Context* ctx) {
 // Hold the emulated 59.94 Hz clock to wall-clock time (frame pacing only; it
 // never influences emulated time).
 extern uint64_t g_mmio_reads;
+void ps1_mmio_hist_dump(void);
 static void pace_frame(PS1Context* ctx) {
-    if (getenv("MIMIPS1_FRAMESTATS") && ctx->frame_count % 60 == 0) { printf("[Mmio] %llu reads in the last second (x32 cycles)\n", (unsigned long long)g_mmio_reads); g_mmio_reads = 0; }
+    if (getenv("MIMIPS1_FRAMESTATS") && ctx->frame_count % 60 == 0) { printf("[Mmio] %llu reads in the last second (x32 cycles)\n", (unsigned long long)g_mmio_reads); g_mmio_reads = 0; if (getenv("MIMIPS1_MMIOHIST")) ps1_mmio_hist_dump(); }
     if (ctx->unthrottled) return;
     uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
     if (ctx->start_time_ns == 0) ctx->start_time_ns = now - ctx->frame_count * PS1_FRAME_NS;
@@ -430,8 +414,6 @@ static void scheduler_run(PS1Context* ctx) {
                 printf("[RAMDUMP] frame %ld pc=%08X ra=%08X sp=%08X\n", dump_at, ctx->cpu.pc, ctx->cpu.r[31], ctx->cpu.r[29]);
             }
         }
-        if (ctx->input.card_touched) { ctx->input.card_touched = false; ctx->cpi_boost_until = ctx->frame_count + 600; }
-        ctx->cpi = (ctx->cpi_boost && ctx->frame_count < ctx->cpi_boost_until) ? ctx->cpi_boost : ctx->cpi_base;
         apply_scripted_input(ctx);
         ps1_input_vblank(&ctx->input);
         ps1_bios_update_pads(ctx);
