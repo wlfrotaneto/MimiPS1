@@ -210,6 +210,17 @@ python3 tools/mimips1_pipeline.py pipeline "path/to/game.bin" --name "MyGame" --
 open "build/Crash Bandicoot.app"
 ```
 
+Every recompiled game gets a **Settings** menu in the macOS menu bar:
+
+| Item | What it does |
+|------|--------------|
+| Volume slider, Mute (⌥⌘M) | Master output volume, remembered between runs |
+| Player 1 / Player 2 Controller | Pick Automatic, the Keyboard, any connected gamepad, or None for each PS1 port |
+| CRT Scanlines (⌘S), Smooth Scaling, Full Screen (⌘F) | Video options |
+| Show Memory Card Files, Erase Memory Card 1/2… | Opens the save folder in Finder; formats a card (asks first) |
+
+Keyboard layout: arrows = D-pad, Z/X/A/S = ✕/○/□/△, Q/W/E/R = L1/R1/L2/R2, Enter = Start, Space/Backspace = Select.
+
 ---
 
 ## Current Project Status
@@ -267,6 +278,7 @@ open "build/Crash Bandicoot.app"
 - [x] Isolated build directories per game (`build/recompiled_<slug>/`) in pipeline
 - [x] Zero-configuration pipeline with automatic title & BIOS detection
 - [x] macOS `.app` bundle builder & compressed UDZO `.dmg` packaging
+- [x] Settings menu (volume, controller assignment, video options, memory card tools) with persisted preferences
 
 ### Active Research & Debugging
 - [x] Castlevania FMV streaming (byte-wide DICR/DMA register accesses)

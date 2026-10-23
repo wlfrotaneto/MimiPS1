@@ -97,6 +97,10 @@ static void audio_callback(void* userData, AudioQueueRef inAQ, AudioQueueBufferR
     AudioQueueEnqueueBuffer(inAQ, inBuffer, 0, NULL);
 }
 
+// Master volume (Settings menu): 0..1 slider position, squared for a perceptual curve
+volatile float g_ps1_master_volume = 1.0f;
+volatile bool  g_ps1_muted = false;
+
 void macos_audio_tick(PS1Context* ctx, uint32_t delta_cycles) {
     if (!g_audio_state.running || !ctx) return;
 
@@ -158,6 +162,11 @@ void macos_audio_tick(PS1Context* ctx, uint32_t delta_cycles) {
                 printf("[Audio] peak=%d active_voices=%d xa_queued=%u spucnt=%04X underruns=%llu\n", peak, voices, ctx->cdrom.xa_write - ctx->cdrom.xa_read, ctx->spu.ctrl, (unsigned long long)atomic_load_explicit(&g_audio_state.ring.underrun_count, memory_order_relaxed));
                 fflush(stdout); peak = 0; frames_acc = 0;
             }
+        }
+        {
+            float v = g_ps1_master_volume;
+            float g = g_ps1_muted ? 0.0f : v * v;
+            if (g < 0.999f) for (int i = 0; i < chunk * 2; i++) mix_buf[i] = (int16_t)((float)mix_buf[i] * g);
         }
         audio_ring_push(&g_audio_state.ring, mix_buf, chunk);
     }

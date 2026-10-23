@@ -51,6 +51,8 @@ static const char* metal_shader_src =
 @property (nonatomic, strong) id<MTLRenderPipelineState> pipelineState;
 @property (nonatomic, strong) id<MTLTexture> vramTexture;
 @property (nonatomic, strong) id<MTLSamplerState> samplerState;
+@property (nonatomic, strong) id<MTLSamplerState> smoothSamplerState;
+@property (nonatomic, assign) BOOL smoothFiltering;   // Settings menu: bilinear instead of nearest-neighbour magnification
 @end
 
 @implementation MimiPS1ViewDelegate {
@@ -94,6 +96,8 @@ static const char* metal_shader_src =
         samplerDesc.minFilter = MTLSamplerMinMagFilterLinear;
         samplerDesc.magFilter = MTLSamplerMinMagFilterNearest;
         _samplerState = [device newSamplerStateWithDescriptor:samplerDesc];
+        samplerDesc.magFilter = MTLSamplerMinMagFilterLinear;
+        _smoothSamplerState = [device newSamplerStateWithDescriptor:samplerDesc];
     }
     return self;
 }
@@ -171,7 +175,7 @@ static const char* metal_shader_src =
         id<MTLRenderCommandEncoder> encoder = [commandBuffer renderCommandEncoderWithDescriptor:renderPass];
         [encoder setRenderPipelineState:_pipelineState];
         [encoder setFragmentTexture:_vramTexture atIndex:0];
-        [encoder setFragmentSamplerState:_samplerState atIndex:0];
+        [encoder setFragmentSamplerState:(_smoothFiltering ? _smoothSamplerState : _samplerState) atIndex:0];
 
         // Maintain authentic 4:3 PS1 aspect ratio with pillarbox / letterbox
         CGSize drawableSize = view.drawableSize;
